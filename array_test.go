@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/stretchr/testify/assert"
@@ -67,6 +68,14 @@ func TestArray_Scan(t *testing.T) {
 	err = db.InsertBatch(ctx, []Model{m1, m2, m3})
 	require.NoError(t, err)
 
+	// Normalize
+	m1.CreatedAt = m1.CreatedAt.Truncate(time.Second)
+	m1.UpdatedAt = m1.UpdatedAt.Truncate(time.Second)
+	m2.CreatedAt = m2.CreatedAt.Truncate(time.Second)
+	m2.UpdatedAt = m2.UpdatedAt.Truncate(time.Second)
+	m3.CreatedAt = m3.CreatedAt.Truncate(time.Second)
+	m3.UpdatedAt = m3.UpdatedAt.Truncate(time.Second)
+
 	// Not found
 	t.Run("not found", func(t *testing.T) {
 		var m arrayModel
@@ -90,8 +99,8 @@ func TestArray_Scan(t *testing.T) {
 
 			err = db.Select(ctx, &dst, m.GetID())
 			assert.NoError(t, err)
-			dst.CreatedAt = dst.CreatedAt.UTC()
-			dst.UpdatedAt = dst.UpdatedAt.UTC()
+			dst.CreatedAt = dst.CreatedAt.UTC().Truncate(time.Second)
+			dst.UpdatedAt = dst.UpdatedAt.UTC().Truncate(time.Second)
 			assert.Equal(t, m, &dst)
 		})
 	}
@@ -108,8 +117,8 @@ func TestArray_Scan(t *testing.T) {
 		assert.Len(t, arrays, 3)
 
 		for i := range arrays {
-			arrays[i].CreatedAt = arrays[i].CreatedAt.UTC()
-			arrays[i].UpdatedAt = arrays[i].UpdatedAt.UTC()
+			arrays[i].CreatedAt = arrays[i].CreatedAt.UTC().Truncate(time.Second)
+			arrays[i].UpdatedAt = arrays[i].UpdatedAt.UTC().Truncate(time.Second)
 		}
 
 		assert.ElementsMatch(t, []*arrayModel{m1, m2, m3}, arrays)
