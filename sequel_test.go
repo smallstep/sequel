@@ -19,12 +19,14 @@ import (
 
 var personSelectQ, personInsertQ, personUpdateQ, personDeleteQ string
 var personInsertExecQ, personHardDeleteQ string
+var personExecQ string
 
 func init() {
 	builder := qb.Must(&personModel{})
 	personSelectQ, personInsertQ, personUpdateQ, personDeleteQ = Queries(builder)
 	personInsertExecQ = builder.NamedInsert()
 	personHardDeleteQ = builder.HardDelete()
+	personExecQ = builder.Insert()
 }
 
 type personModel struct {
@@ -308,5 +310,119 @@ func TestDBQueries(t *testing.T) {
 		res, err := db.Exec(ctx, "DELETE FROM person_test")
 		assert.NoError(t, err)
 		assert.NoError(t, RowsAffected(res, 4)) // p1 to p4, p5 is hard deleted
+	})
+}
+
+func TestTxQueries(t *testing.T) {
+	db, err := New(postgresDataSource)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, db.Close())
+	})
+
+	ctx := context.Background()
+
+	tx, err := db.Begin(ctx)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, tx.Rollback())
+	}()
+
+	p1 := &personModel{
+		Name:  "Lucky Luke",
+		Email: NullString("lucky@example.com"),
+	}
+	p2 := &personModelExtra{
+		personModel: personModel{
+			Base: Base{
+				ID: "d59a4685-9ab9-4323-9af9-14ca352cc65b",
+			},
+			Name:  "Jolly Jumper",
+			Email: NullString("jolly@example.com"),
+		},
+	}
+
+	t.Run("insert", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+
+		assert.NoError(t, tx.Insert(p1))
+		assert.NoError(t, tx.Insert(p2))
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("insert error", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		assert.Error(t, tx.Insert(p1))
+		assert.NoError(t, tx.Rollback())
+	})
+
+	t.Run("update", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+
+		assert.NoError(t, tx.Update(p1))
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("update error", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		pp := &personModel{
+			Base:  p1.Base,
+			Name:  p1.Name,
+			Email: p2.Email,
+		}
+
+		assert.Error(t, tx.Update(pp))
+		assert.NoError(t, tx.Rollback())
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+
+		assert.NoError(t, tx.Delete(p1))
+		assert.NoError(t, tx.HardDelete(p2))
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("delete error", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		assert.Error(t, tx.Delete(p2))
+		assert.NoError(t, tx.Rollback())
+	})
+
+	t.Run("hard delete error", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		assert.Error(t, tx.HardDelete(p2))
+		assert.NoError(t, tx.Rollback())
+	})
+
+	t.Run("exec", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+
+		res, err := tx.Exec(personExecQ, p2.ID, p2.CreatedAt, p2.UpdatedAt, nil, p2.Name, p2.Email)
+		assert.NoError(t, err)
+		n, err := res.RowsAffected()
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), n)
+		assert.NoError(t, tx.Commit())
 	})
 }
