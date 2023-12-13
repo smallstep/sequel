@@ -305,6 +305,12 @@ func (t *Tx) Rollback() error {
 	return t.tx.Rollback()
 }
 
+// Exec executes a query without returning any rows. The args are for any
+// placeholder parameters in the query.
+func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
+	return t.tx.Exec(query, args...)
+}
+
 // Insert adds a new insert query for the given model in the transaction.
 func (t *Tx) Insert(arg Model) error {
 	var id string
