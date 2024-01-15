@@ -63,7 +63,7 @@ require (
 require (
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/go-sqlx/sqlx v1.3.6
-	github.com/jackc/pgx/v5 v5.5.1
+	github.com/jackc/pgx/v5 v5.5.2
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	go.step.sm/qb v1.3.0
 	gopkg.in/yaml.v3 v3.0.1 // indirect
