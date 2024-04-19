@@ -28,7 +28,8 @@ type DB struct {
 }
 
 type options struct {
-	Clock clock.Clock
+	Clock      clock.Clock
+	DriverName string
 }
 
 // Option is the type of options that can be used to modify the database. This
@@ -42,17 +43,27 @@ func WithClock(c clock.Clock) Option {
 	}
 }
 
+// WithDriver defines the driver to use, defaults to pgx/v5. This default driver
+// is automatically loaded by this package, any other driver must be loaded by
+// the user.
+func WithDriver(driverName string) Option {
+	return func(o *options) {
+		o.DriverName = driverName
+	}
+}
+
 // New creates a new DB. It will fail if it cannot ping it.
 func New(dataSourceName string, opts ...Option) (*DB, error) {
 	options := &options{
-		Clock: clock.New(),
+		Clock:      clock.New(),
+		DriverName: "pgx/v5",
 	}
 	for _, fn := range opts {
 		fn(options)
 	}
 
 	// Connect opens the database and verifies with a ping
-	db, err := sqlx.Connect("pgx/v5", dataSourceName)
+	db, err := sqlx.Connect(options.DriverName, dataSourceName)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to the database: %w", err)
 	}
@@ -118,6 +129,11 @@ func (d *DB) Close() error {
 	return d.db.Close()
 }
 
+// Rebind transforms a query from `?` to the DB driver's bind type.
+func (d *DB) Rebind(query string) string {
+	return d.db.Rebind(query)
+}
+
 // Query executes a query that returns rows, typically a SELECT. The args are
 // for any placeholder parameters in the query.
 func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
@@ -139,6 +155,44 @@ func (d *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 // placeholder parameters in the query.
 func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, error) {
 	return d.db.ExecContext(ctx, query, args...)
+}
+
+// Query executes a query that returns rows, typically a SELECT. The query is
+// rebound from `?` to the DB driver's bind type. The args are for any
+// placeholder parameters in the query.
+func (d *DB) RebindQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return d.db.QueryContext(ctx, d.db.Rebind(query), args...)
+}
+
+// QueryRow executes a query that is expected to return at most one row. The
+// query is rebound from `?` to the DB driver's bind type. QueryRowContext
+// always returns a non-nil value. Errors are deferred until Row's Scan method
+// is called.
+//
+// If the query selects no rows, the *Row's Scan will return ErrNoRows.
+// Otherwise, the *Row's Scan scans the first selected row and discards the
+// rest.
+func (d *DB) RebindQueryRow(ctx context.Context, query string, args ...any) *sql.Row {
+	return d.db.QueryRowContext(ctx, d.db.Rebind(query), args...)
+}
+
+// Exec executes a query without returning any rows. The query is rebound from
+// `?` to the DB driver's bind type. The args are for any placeholder parameters
+// in the query.
+func (d *DB) RebindExec(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return d.db.ExecContext(ctx, d.db.Rebind(query), args...)
+}
+
+// NamedQuery executes a query that returns rows. Any named placeholder
+// parameters are replaced with fields from arg.
+func (d *DB) NamedQuery(ctx context.Context, query string, arg any) (*sqlx.Rows, error) {
+	return d.db.NamedQueryContext(ctx, query, arg)
+}
+
+// NamedExec using executes a query without returning any rows. Any named
+// placeholder parameters are replaced with fields from arg.
+func (d *DB) NamedExec(ctx context.Context, query string, arg any) (sql.Result, error) {
+	return d.db.NamedExecContext(ctx, query, arg)
 }
 
 // Get populates the given model for the result of the given select query.
@@ -295,6 +349,11 @@ func (d *DB) Begin(ctx context.Context) (*Tx, error) {
 	}, nil
 }
 
+// Rebind transforms a query from QUESTION to the DB driver's bind type.
+func (t *Tx) Rebind(query string) string {
+	return t.tx.Rebind(query)
+}
+
 // Commit commits the transaction.
 func (t *Tx) Commit() error {
 	return t.tx.Commit()
@@ -305,10 +364,70 @@ func (t *Tx) Rollback() error {
 	return t.tx.Rollback()
 }
 
+// Query executes a query that returns rows, typically a SELECT. The args are
+// for any placeholder parameters in the query.
+func (t *Tx) Query(query string, args ...any) (*sql.Rows, error) {
+	return t.tx.Query(query, args...)
+}
+
+// QueryRow executes a query that is expected to return at most one row.
+// QueryRowContext always returns a non-nil value. Errors are deferred until
+// Row's Scan method is called.
+//
+// If the query selects no rows, the *Row's Scan will return ErrNoRows.
+// Otherwise, the *Row's Scan scans the first selected row and discards the
+// rest.
+func (t *Tx) QueryRow(query string, args ...any) *sql.Row {
+	return t.tx.QueryRow(query, args...)
+}
+
 // Exec executes a query without returning any rows. The args are for any
 // placeholder parameters in the query.
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
 	return t.tx.Exec(query, args...)
+}
+
+// Query executes a query that returns rows, typically a SELECT. The query is
+// rebound from `?` to the DB driver's bind type. The args are for any
+// placeholder parameters in the query.
+func (t *Tx) RebindQuery(query string, args ...any) (*sql.Rows, error) {
+	return t.tx.Query(t.tx.Rebind(query), args...)
+}
+
+// QueryRow executes a query that is expected to return at most one row. The
+// query is rebound from `?` to the DB driver's bind type. QueryRowContext
+// always returns a non-nil value. Errors are deferred until Row's Scan method
+// is called.
+//
+// If the query selects no rows, the *Row's Scan will return ErrNoRows.
+// Otherwise, the *Row's Scan scans the first selected row and discards the
+// rest.
+func (t *Tx) RebindQueryRow(query string, args ...any) *sql.Row {
+	return t.tx.QueryRow(t.tx.Rebind(query), args...)
+}
+
+// Exec executes a query without returning any rows. The query is rebound from
+// `?` to the DB driver's bind type. The args are for any placeholder parameters
+// in the query.
+func (t *Tx) RebindExec(query string, args ...any) (sql.Result, error) {
+	return t.tx.Exec(t.tx.Rebind(query), args...)
+}
+
+// NamedQuery executes a query that returns rows. Any named placeholder
+// parameters are replaced with fields from arg.
+func (t *Tx) NamedQuery(query string, arg any) (*sqlx.Rows, error) {
+	return t.tx.NamedQuery(query, arg)
+}
+
+// NamedExec using executes a query without returning any rows. Any named
+// placeholder parameters are replaced with fields from arg.
+func (t *Tx) NamedExec(query string, arg any) (sql.Result, error) {
+	return t.tx.NamedExec(query, arg)
+}
+
+// Get populates the given model for the result of the given select query.
+func (t *Tx) Get(dest Model, query string, args ...any) error {
+	return t.tx.Get(dest, query, args...)
 }
 
 // Insert adds a new insert query for the given model in the transaction.

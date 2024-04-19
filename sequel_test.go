@@ -9,11 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sqlx/sqlx"
 	"github.com/jackc/pgx/v5/pgconn"
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.step.sm/qb"
-
 	"go.step.sm/sequel/clock"
 )
 
@@ -66,6 +67,7 @@ func TestNew(t *testing.T) {
 	}{
 		{"ok", args{postgresDataSource, nil}, assert.NoError},
 		{"ok with clock", args{postgresDataSource, []Option{WithClock(clock.NewMock(time.Now()))}}, assert.NoError},
+		{"ok with driver", args{postgresDataSource, []Option{WithDriver("pgx/v5")}}, assert.NoError},
 		{"fail ping", args{strings.ReplaceAll(postgresDataSource, dbUser, "foo"), nil}, assert.Error},
 	}
 	for _, tt := range tests {
@@ -212,6 +214,11 @@ func TestDBQueries(t *testing.T) {
 
 	ctx := context.Background()
 
+	t.Run("rebind", func(t *testing.T) {
+		query := db.Rebind("SELECT * FROM person_test WHERE name = ? AND email = ?")
+		assert.Equal(t, "SELECT * FROM person_test WHERE name = $1 AND email = $2", query)
+	})
+
 	t.Run("insert", func(t *testing.T) {
 		assert.NoError(t, db.Insert(ctx, p1))
 		assert.NoError(t, db.InsertBatch(ctx, []Model{p2, p3, p4}))
@@ -254,9 +261,55 @@ func TestDBQueries(t *testing.T) {
 	t.Run("queryRow", func(t *testing.T) {
 		var p personModel
 		row := db.QueryRow(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
-		assert.NoError(t, err)
+		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
 		equalPerson(t, p1, &p)
+	})
+
+	t.Run("rebindQuery", func(t *testing.T) {
+		rows, err := db.RebindQuery(ctx, "SELECT * FROM person_test WHERE id = ?", p1.GetID())
+		assert.NoError(t, err)
+		for rows.Next() {
+			var p personModel
+			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+			equalPerson(t, p1, &p)
+		}
+		assert.NoError(t, rows.Err())
+		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
+	})
+
+	t.Run("rebindQueryRow", func(t *testing.T) {
+		var p personModel
+		row := db.RebindQueryRow(ctx, "SELECT * FROM person_test WHERE id = ?", p1.GetID())
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		equalPerson(t, p1, &p)
+	})
+
+	t.Run("namedQuery", func(t *testing.T) {
+		rows, err := db.NamedQuery(ctx, "SELECT * FROM person_test WHERE id = :id", p1)
+		assert.NoError(t, err)
+		for rows.Next() {
+			var p personModel
+			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+			equalPerson(t, p1, &p)
+		}
+		assert.NoError(t, rows.Err())
+		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
+	})
+
+	t.Run("namedQuery withMap", func(t *testing.T) {
+		rows, err := db.NamedQuery(ctx, "SELECT * FROM person_test WHERE id = :id", map[string]any{
+			"id": p1.GetID(),
+		})
+		assert.NoError(t, err)
+		for rows.Next() {
+			var p personModel
+			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+			equalPerson(t, p1, &p)
+		}
+		assert.NoError(t, rows.Err())
+		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
 	})
 
 	t.Run("get", func(t *testing.T) {
@@ -306,14 +359,73 @@ func TestDBQueries(t *testing.T) {
 		assert.Error(t, db.Select(ctx, &pp, p5.GetID()))
 	})
 
+	t.Run("rebindExec", func(t *testing.T) {
+		var pp personModel
+		p1.DeletedAt = sql.NullTime{
+			Valid: true,
+			Time:  time.Now().UTC().Truncate(time.Second),
+		}
+		res, err := db.RebindExec(ctx, "UPDATE person_test SET deleted_at = ? WHERE id = ?", p1.DeletedAt, p1.ID)
+		assert.NoError(t, err)
+		assert.NoError(t, RowsAffected(res, 1))
+		assert.NoError(t, db.Get(ctx, &pp, "SELECT * FROM person_test WHERE id = $1", p1.GetID()))
+		equalPerson(t, p1, &pp)
+	})
+
+	t.Run("namedExec", func(t *testing.T) {
+		var pp personModel
+		p1.DeletedAt = sql.NullTime{
+			Valid: true,
+			Time:  time.Now().UTC().Truncate(time.Second),
+		}
+		res, err := db.NamedExec(ctx, "UPDATE person_test SET deleted_at = :deleted_at WHERE id = :id", p1)
+		assert.NoError(t, err)
+		assert.NoError(t, RowsAffected(res, 1))
+		assert.NoError(t, db.Get(ctx, &pp, "SELECT * FROM person_test WHERE id = $1", p1.GetID()))
+		equalPerson(t, p1, &pp)
+	})
+
+	t.Run("namedExec map", func(t *testing.T) {
+		var pp personModel
+		p1.DeletedAt = sql.NullTime{
+			Valid: true,
+			Time:  time.Now().UTC().Truncate(time.Second),
+		}
+		res, err := db.NamedExec(ctx, "UPDATE person_test SET deleted_at = :deleted_at WHERE id = :id", map[string]any{
+			"deleted_at": p1.DeletedAt.Time,
+			"id":         p1.ID,
+		})
+		assert.NoError(t, err)
+		assert.NoError(t, RowsAffected(res, 1))
+		assert.NoError(t, db.Get(ctx, &pp, "SELECT * FROM person_test WHERE id = $1", p1.GetID()))
+		equalPerson(t, p1, &pp)
+	})
+
 	t.Run("exec (clear table)", func(t *testing.T) {
 		res, err := db.Exec(ctx, "DELETE FROM person_test")
 		assert.NoError(t, err)
 		assert.NoError(t, RowsAffected(res, 4)) // p1 to p4, p5 is hard deleted
 	})
+
 }
 
 func TestTxQueries(t *testing.T) {
+	equalPerson := func(t *testing.T, want, got *personModel) bool {
+		t.Helper()
+		if got != nil {
+			got.CreatedAt = got.CreatedAt.UTC().Truncate(time.Second)
+			got.UpdatedAt = got.UpdatedAt.UTC().Truncate(time.Second)
+			if got.DeletedAt.Valid {
+				got.DeletedAt = NullTime(got.DeletedAt.Time.UTC().Truncate(time.Second))
+			}
+		}
+		want.CreatedAt = want.CreatedAt.Truncate(time.Second)
+		want.UpdatedAt = want.UpdatedAt.Truncate(time.Second)
+		if want.DeletedAt.Valid {
+			want.DeletedAt = NullTime(want.DeletedAt.Time.Truncate(time.Second))
+		}
+		return assert.Equal(t, want, got)
+	}
 	db, err := New(postgresDataSource)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -342,6 +454,14 @@ func TestTxQueries(t *testing.T) {
 		},
 	}
 
+	t.Run("rebind", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		query := tx.Rebind("SELECT * FROM person_test WHERE name = ? AND email = ?")
+		assert.Equal(t, "SELECT * FROM person_test WHERE name = $1 AND email = $2", query)
+		assert.NoError(t, tx.Rollback())
+	})
+
 	t.Run("insert", func(t *testing.T) {
 		tx, err := db.Begin(ctx)
 		require.NoError(t, err)
@@ -359,6 +479,83 @@ func TestTxQueries(t *testing.T) {
 		require.NoError(t, err)
 		assert.Error(t, tx.Insert(p1))
 		assert.NoError(t, tx.Rollback())
+	})
+
+	t.Run("query", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		rows, err := tx.Query("SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.NoError(t, err)
+		for rows.Next() {
+			var p personModel
+			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+			equalPerson(t, p1, &p)
+		}
+		assert.NoError(t, rows.Err())
+		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("queryRow", func(t *testing.T) {
+		var p personModel
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		row := tx.QueryRow("SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		equalPerson(t, p1, &p)
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("rebindQuery", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		rows, err := tx.RebindQuery("SELECT * FROM person_test WHERE id = ?", p1.GetID())
+		assert.NoError(t, err)
+		for rows.Next() {
+			var p personModel
+			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+			equalPerson(t, p1, &p)
+		}
+		assert.NoError(t, rows.Err())
+		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("rebindQueryRow", func(t *testing.T) {
+		var p personModel
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		row := tx.RebindQueryRow("SELECT * FROM person_test WHERE id = ?", p1.GetID())
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		equalPerson(t, p1, &p)
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("namedQuery", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		rows, err := tx.NamedQuery("SELECT * FROM person_test WHERE id = :id", p1)
+		assert.NoError(t, err)
+		for rows.Next() {
+			var p personModel
+			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+			equalPerson(t, p1, &p)
+		}
+		assert.NoError(t, rows.Err())
+		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("get", func(t *testing.T) {
+		var p personModel
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		err = tx.Get(&p, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.NoError(t, err)
+		equalPerson(t, p1, &p)
+		assert.NoError(t, tx.Commit())
 	})
 
 	t.Run("update", func(t *testing.T) {
@@ -411,6 +608,68 @@ func TestTxQueries(t *testing.T) {
 		assert.NoError(t, tx.Rollback())
 	})
 
+	t.Run("rebindExec", func(t *testing.T) {
+		var p personModel
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+
+		p1.DeletedAt = sql.NullTime{
+			Time:  time.Now().UTC().Truncate(time.Second),
+			Valid: true,
+		}
+
+		res, err := tx.RebindExec("UPDATE person_test SET deleted_at = ? WHERE id = ?", p1.DeletedAt, p1.ID)
+		assert.NoError(t, err)
+		n, err := res.RowsAffected()
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), n)
+		// In transaction
+		row := tx.RebindQueryRow("SELECT * FROM person_test WHERE id = ?", p1.GetID())
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		equalPerson(t, p1, &p)
+		assert.NoError(t, tx.Commit())
+		// After commit
+		row = db.RebindQueryRow(ctx, "SELECT * FROM person_test WHERE id = ?", p1.GetID())
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		equalPerson(t, p1, &p)
+	})
+
+	t.Run("namedExec", func(t *testing.T) {
+		var p personModel
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+
+		p1.DeletedAt = sql.NullTime{
+			Time:  time.Now().UTC().Truncate(time.Second),
+			Valid: true,
+		}
+
+		res, err := tx.NamedExec("UPDATE person_test SET deleted_at = :deleted_at WHERE id = :id", p1)
+		assert.NoError(t, err)
+		n, err := res.RowsAffected()
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), n)
+		// In transaction
+		row := tx.QueryRow("SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		equalPerson(t, p1, &p)
+		assert.NoError(t, tx.Commit())
+		// After commit
+		row = db.QueryRow(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		equalPerson(t, p1, &p)
+	})
+
 	t.Run("exec", func(t *testing.T) {
 		tx, err := db.Begin(ctx)
 		require.NoError(t, err)
@@ -425,4 +684,31 @@ func TestTxQueries(t *testing.T) {
 		assert.Equal(t, int64(1), n)
 		assert.NoError(t, tx.Commit())
 	})
+}
+
+func TestDB_Rebind(t *testing.T) {
+	type fields struct {
+		db    *sqlx.DB
+		clock clock.Clock
+	}
+	type args struct {
+		query string
+	}
+	tests := []struct {
+		name   string
+		fields fields
+		args   args
+		want   string
+	}{
+		// TODO: Add test cases.
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := &DB{
+				db:    tt.fields.db,
+				clock: tt.fields.clock,
+			}
+			assert.Equal(t, tt.want, d.Rebind(tt.args.query))
+		})
+	}
 }
