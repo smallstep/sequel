@@ -65,6 +65,6 @@ func NullString(s string) sql.NullString {
 // if the zero value is given.
 func NullTime(t time.Time) sql.NullTime {
 	return sql.NullTime{
-		Time: t, Valid: t.IsZero(),
+		Time: t, Valid: !t.IsZero(),
 	}
 }
