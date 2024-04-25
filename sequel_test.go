@@ -18,9 +18,13 @@ import (
 	"go.step.sm/sequel/clock"
 )
 
-var personSelectQ, personInsertQ, personUpdateQ, personDeleteQ string
-var personInsertExecQ, personHardDeleteQ string
-var personExecQ string
+var (
+	personSelectQ, personInsertQ, personUpdateQ, personDeleteQ                         string
+	personInsertExecQ, personHardDeleteQ                                               string
+	personExecQ                                                                        string
+	personBindedSelectQ, personBindedInsertQ, personBindedUpdateQ, personBindedDeleteQ string
+	personBindedHardDeleteQ                                                            string
+)
 
 func init() {
 	builder := qb.Must(&personModel{})
@@ -28,6 +32,10 @@ func init() {
 	personInsertExecQ = builder.NamedInsert()
 	personHardDeleteQ = builder.HardDelete()
 	personExecQ = builder.Insert()
+
+	builder = qb.Must(&personModelBinded{}, qb.BindType(qb.QUESTION))
+	personBindedSelectQ, personBindedInsertQ, personBindedUpdateQ, personBindedDeleteQ = Queries(builder)
+	personBindedHardDeleteQ = builder.HardDelete()
 }
 
 type personModel struct {
@@ -40,6 +48,16 @@ func (m *personModel) Select() string { return personSelectQ }
 func (m *personModel) Insert() string { return personInsertQ }
 func (m *personModel) Update() string { return personUpdateQ }
 func (m *personModel) Delete() string { return personDeleteQ }
+
+type personModelBinded struct {
+	personModel `dbtable:"person_test"`
+}
+
+func (m *personModelBinded) Select() string     { return personBindedSelectQ }
+func (m *personModelBinded) Insert() string     { return personBindedInsertQ }
+func (m *personModelBinded) Update() string     { return personBindedUpdateQ }
+func (m *personModelBinded) Delete() string     { return personBindedDeleteQ }
+func (m *personModelBinded) HardDelete() string { return personBindedHardDeleteQ }
 
 type personModelExtra struct {
 	personModel
@@ -55,6 +73,42 @@ func (m *personModelExtra) HardDelete() string {
 
 func (m *personModelExtra) WithExecInsert() {}
 
+func assertEqualPerson(t *testing.T, want, got *personModel) bool {
+	t.Helper()
+	if got != nil {
+		got.CreatedAt = got.CreatedAt.UTC().Truncate(time.Second)
+		got.UpdatedAt = got.UpdatedAt.UTC().Truncate(time.Second)
+		if got.DeletedAt.Valid {
+			got.DeletedAt = NullTime(got.DeletedAt.Time.UTC().Truncate(time.Second))
+		}
+	}
+	want.CreatedAt = want.CreatedAt.Truncate(time.Second)
+	want.UpdatedAt = want.UpdatedAt.Truncate(time.Second)
+	if want.DeletedAt.Valid {
+		want.DeletedAt = NullTime(want.DeletedAt.Time.Truncate(time.Second))
+	}
+	return assert.Equal(t, want, got)
+}
+
+func assertEqualPersons(t *testing.T, want, got []*personModel) bool {
+	t.Helper()
+	for i := range got {
+		got[i].CreatedAt = got[i].CreatedAt.UTC().Truncate(time.Second)
+		got[i].UpdatedAt = got[i].UpdatedAt.UTC().Truncate(time.Second)
+		if got[i].DeletedAt.Valid {
+			got[i].DeletedAt = NullTime(got[i].DeletedAt.Time.UTC().Truncate(time.Second))
+		}
+	}
+	for i := range want {
+		want[i].CreatedAt = want[i].CreatedAt.Truncate(time.Second)
+		want[i].UpdatedAt = want[i].UpdatedAt.Truncate(time.Second)
+		if want[i].DeletedAt.Valid {
+			want[i].DeletedAt = NullTime(want[i].DeletedAt.Time.Truncate(time.Second))
+		}
+	}
+	return assert.ElementsMatch(t, want, got)
+}
+
 func TestNew(t *testing.T) {
 	type args struct {
 		dataSourceName string
@@ -68,6 +122,7 @@ func TestNew(t *testing.T) {
 		{"ok", args{postgresDataSource, nil}, assert.NoError},
 		{"ok with clock", args{postgresDataSource, []Option{WithClock(clock.NewMock(time.Now()))}}, assert.NoError},
 		{"ok with driver", args{postgresDataSource, []Option{WithDriver("pgx/v5")}}, assert.NoError},
+		{"ok with rebindModel", args{postgresDataSource, []Option{WithRebindModel()}}, assert.NoError},
 		{"fail ping", args{strings.ReplaceAll(postgresDataSource, dbUser, "foo"), nil}, assert.Error},
 	}
 	for _, tt := range tests {
@@ -140,41 +195,6 @@ func TestIsUniqueViolation(t *testing.T) {
 }
 
 func TestDBQueries(t *testing.T) {
-	equalPerson := func(t *testing.T, want, got *personModel) bool {
-		t.Helper()
-		if got != nil {
-			got.CreatedAt = got.CreatedAt.UTC().Truncate(time.Second)
-			got.UpdatedAt = got.UpdatedAt.UTC().Truncate(time.Second)
-			if got.DeletedAt.Valid {
-				got.DeletedAt = NullTime(got.DeletedAt.Time.UTC().Truncate(time.Second))
-			}
-		}
-		want.CreatedAt = want.CreatedAt.Truncate(time.Second)
-		want.UpdatedAt = want.UpdatedAt.Truncate(time.Second)
-		if want.DeletedAt.Valid {
-			want.DeletedAt = NullTime(want.DeletedAt.Time.Truncate(time.Second))
-		}
-		return assert.Equal(t, want, got)
-	}
-	equalPersons := func(t *testing.T, want, got []*personModel) bool {
-		t.Helper()
-		for i := range got {
-			got[i].CreatedAt = got[i].CreatedAt.UTC().Truncate(time.Second)
-			got[i].UpdatedAt = got[i].UpdatedAt.UTC().Truncate(time.Second)
-			if got[i].DeletedAt.Valid {
-				got[i].DeletedAt = NullTime(got[i].DeletedAt.Time.UTC().Truncate(time.Second))
-			}
-		}
-		for i := range want {
-			want[i].CreatedAt = want[i].CreatedAt.Truncate(time.Second)
-			want[i].UpdatedAt = want[i].UpdatedAt.Truncate(time.Second)
-			if want[i].DeletedAt.Valid {
-				want[i].DeletedAt = NullTime(want[i].DeletedAt.Time.Truncate(time.Second))
-			}
-		}
-		return assert.ElementsMatch(t, want, got)
-	}
-
 	db, err := New(postgresDataSource)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -252,7 +272,7 @@ func TestDBQueries(t *testing.T) {
 		for rows.Next() {
 			var p personModel
 			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-			equalPerson(t, p1, &p)
+			assertEqualPerson(t, p1, &p)
 		}
 		assert.NoError(t, rows.Err())
 		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
@@ -263,7 +283,7 @@ func TestDBQueries(t *testing.T) {
 		row := db.QueryRow(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
 	})
 
 	t.Run("rebindQuery", func(t *testing.T) {
@@ -272,7 +292,7 @@ func TestDBQueries(t *testing.T) {
 		for rows.Next() {
 			var p personModel
 			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-			equalPerson(t, p1, &p)
+			assertEqualPerson(t, p1, &p)
 		}
 		assert.NoError(t, rows.Err())
 		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
@@ -283,7 +303,7 @@ func TestDBQueries(t *testing.T) {
 		row := db.RebindQueryRow(ctx, "SELECT * FROM person_test WHERE id = ?", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
 	})
 
 	t.Run("namedQuery", func(t *testing.T) {
@@ -292,7 +312,7 @@ func TestDBQueries(t *testing.T) {
 		for rows.Next() {
 			var p personModel
 			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-			equalPerson(t, p1, &p)
+			assertEqualPerson(t, p1, &p)
 		}
 		assert.NoError(t, rows.Err())
 		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
@@ -306,7 +326,7 @@ func TestDBQueries(t *testing.T) {
 		for rows.Next() {
 			var p personModel
 			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-			equalPerson(t, p1, &p)
+			assertEqualPerson(t, p1, &p)
 		}
 		assert.NoError(t, rows.Err())
 		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
@@ -315,25 +335,25 @@ func TestDBQueries(t *testing.T) {
 	t.Run("get", func(t *testing.T) {
 		var pp1, pp2 personModel
 		assert.NoError(t, db.Get(ctx, &pp1, "SELECT * FROM person_test WHERE id = $1", p1.GetID()))
-		equalPerson(t, p1, &pp1)
+		assertEqualPerson(t, p1, &pp1)
 		assert.Equal(t, sql.ErrNoRows, db.Get(ctx, &pp2, "SELECT * FROM person_test WHERE id = $1 AND deleted_at IS NOT NULL", p1.GetID()))
-		equalPerson(t, &personModel{}, &pp2)
+		assertEqualPerson(t, &personModel{}, &pp2)
 	})
 
 	t.Run("getAll", func(t *testing.T) {
 		var ap []*personModel
 		assert.NoError(t, db.GetAll(ctx, &ap, "SELECT * FROM person_test"))
-		equalPersons(t, []*personModel{p1, p2, p3, &p4.personModel, &p5.personModel}, ap)
+		assertEqualPersons(t, []*personModel{p1, p2, p3, &p4.personModel, &p5.personModel}, ap)
 		assert.NoError(t, db.GetAll(ctx, &ap, "SELECT * FROM person_test WHERE deleted_at IS NOT NULL"))
-		equalPersons(t, []*personModel{}, ap)
+		assertEqualPersons(t, []*personModel{}, ap)
 	})
 
 	t.Run("select", func(t *testing.T) {
 		var pp1, pp2 personModel
 		assert.NoError(t, db.Select(ctx, &pp1, p2.GetID()))
-		equalPerson(t, p2, &pp1)
+		assertEqualPerson(t, p2, &pp1)
 		assert.Equal(t, sql.ErrNoRows, db.Select(ctx, &pp2, "cf349a3d-7bc7-4208-bb73-1b1651e80540"))
-		equalPerson(t, &personModel{}, &pp2)
+		assertEqualPerson(t, &personModel{}, &pp2)
 	})
 
 	t.Run("update", func(t *testing.T) {
@@ -342,7 +362,7 @@ func TestDBQueries(t *testing.T) {
 		p3.Email = NullString("averell@example.com")
 		assert.NoError(t, db.Update(ctx, p3))
 		assert.NoError(t, db.Select(ctx, &pp, p3.GetID()))
-		equalPerson(t, p3, &pp)
+		assertEqualPerson(t, p3, &pp)
 		assert.Equal(t, "Averell Dalton", pp.Name)
 		assert.Equal(t, NullString("averell@example.com"), pp.Email)
 	})
@@ -369,7 +389,7 @@ func TestDBQueries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, RowsAffected(res, 1))
 		assert.NoError(t, db.Get(ctx, &pp, "SELECT * FROM person_test WHERE id = $1", p1.GetID()))
-		equalPerson(t, p1, &pp)
+		assertEqualPerson(t, p1, &pp)
 	})
 
 	t.Run("namedExec", func(t *testing.T) {
@@ -382,7 +402,7 @@ func TestDBQueries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, RowsAffected(res, 1))
 		assert.NoError(t, db.Get(ctx, &pp, "SELECT * FROM person_test WHERE id = $1", p1.GetID()))
-		equalPerson(t, p1, &pp)
+		assertEqualPerson(t, p1, &pp)
 	})
 
 	t.Run("namedExec map", func(t *testing.T) {
@@ -398,7 +418,7 @@ func TestDBQueries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, RowsAffected(res, 1))
 		assert.NoError(t, db.Get(ctx, &pp, "SELECT * FROM person_test WHERE id = $1", p1.GetID()))
-		equalPerson(t, p1, &pp)
+		assertEqualPerson(t, p1, &pp)
 	})
 
 	t.Run("exec (clear table)", func(t *testing.T) {
@@ -406,26 +426,9 @@ func TestDBQueries(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, RowsAffected(res, 4)) // p1 to p4, p5 is hard deleted
 	})
-
 }
 
 func TestTxQueries(t *testing.T) {
-	equalPerson := func(t *testing.T, want, got *personModel) bool {
-		t.Helper()
-		if got != nil {
-			got.CreatedAt = got.CreatedAt.UTC().Truncate(time.Second)
-			got.UpdatedAt = got.UpdatedAt.UTC().Truncate(time.Second)
-			if got.DeletedAt.Valid {
-				got.DeletedAt = NullTime(got.DeletedAt.Time.UTC().Truncate(time.Second))
-			}
-		}
-		want.CreatedAt = want.CreatedAt.Truncate(time.Second)
-		want.UpdatedAt = want.UpdatedAt.Truncate(time.Second)
-		if want.DeletedAt.Valid {
-			want.DeletedAt = NullTime(want.DeletedAt.Time.Truncate(time.Second))
-		}
-		return assert.Equal(t, want, got)
-	}
 	db, err := New(postgresDataSource)
 	require.NoError(t, err)
 	t.Cleanup(func() {
@@ -489,7 +492,7 @@ func TestTxQueries(t *testing.T) {
 		for rows.Next() {
 			var p personModel
 			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-			equalPerson(t, p1, &p)
+			assertEqualPerson(t, p1, &p)
 		}
 		assert.NoError(t, rows.Err())
 		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
@@ -503,7 +506,7 @@ func TestTxQueries(t *testing.T) {
 		row := tx.QueryRow("SELECT * FROM person_test WHERE id = $1", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
 		assert.NoError(t, tx.Commit())
 	})
 
@@ -515,7 +518,7 @@ func TestTxQueries(t *testing.T) {
 		for rows.Next() {
 			var p personModel
 			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-			equalPerson(t, p1, &p)
+			assertEqualPerson(t, p1, &p)
 		}
 		assert.NoError(t, rows.Err())
 		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
@@ -529,7 +532,7 @@ func TestTxQueries(t *testing.T) {
 		row := tx.RebindQueryRow("SELECT * FROM person_test WHERE id = ?", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
 		assert.NoError(t, tx.Commit())
 	})
 
@@ -541,7 +544,7 @@ func TestTxQueries(t *testing.T) {
 		for rows.Next() {
 			var p personModel
 			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-			equalPerson(t, p1, &p)
+			assertEqualPerson(t, p1, &p)
 		}
 		assert.NoError(t, rows.Err())
 		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
@@ -554,7 +557,17 @@ func TestTxQueries(t *testing.T) {
 		require.NoError(t, err)
 		err = tx.Get(&p, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
 		assert.NoError(t, err)
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("select", func(t *testing.T) {
+		var p personModel
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		err = tx.Select(&p, p1.GetID())
+		assert.NoError(t, err)
+		assertEqualPerson(t, p1, &p)
 		assert.NoError(t, tx.Commit())
 	})
 
@@ -630,13 +643,13 @@ func TestTxQueries(t *testing.T) {
 		row := tx.RebindQueryRow("SELECT * FROM person_test WHERE id = ?", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
 		assert.NoError(t, tx.Commit())
 		// After commit
 		row = db.RebindQueryRow(ctx, "SELECT * FROM person_test WHERE id = ?", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
 	})
 
 	t.Run("namedExec", func(t *testing.T) {
@@ -661,13 +674,13 @@ func TestTxQueries(t *testing.T) {
 		row := tx.QueryRow("SELECT * FROM person_test WHERE id = $1", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
 		assert.NoError(t, tx.Commit())
 		// After commit
 		row = db.QueryRow(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
-		equalPerson(t, p1, &p)
+		assertEqualPerson(t, p1, &p)
 	})
 
 	t.Run("exec", func(t *testing.T) {
@@ -684,9 +697,124 @@ func TestTxQueries(t *testing.T) {
 		assert.Equal(t, int64(1), n)
 		assert.NoError(t, tx.Commit())
 	})
+
+	t.Run("exec (clear table)", func(t *testing.T) {
+		_, err := db.Exec(ctx, "DELETE FROM person_test")
+		assert.NoError(t, err)
+	})
+}
+
+func TestDBQueriesRebind(t *testing.T) {
+	db, err := New(postgresDataSource, WithRebindModel())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, db.Close())
+	})
+
+	p1 := &personModelBinded{
+		personModel: personModel{
+			Name:  "Lucky Luke",
+			Email: NullString("lucky@example.com"),
+		},
+	}
+
+	ctx := context.Background()
+	t.Run("insert", func(t *testing.T) {
+		assert.NoError(t, db.Insert(ctx, p1))
+	})
+
+	t.Run("select", func(t *testing.T) {
+		var pp personModelBinded
+		assert.NoError(t, db.Select(ctx, &pp, p1.GetID()))
+		assertEqualPerson(t, &p1.personModel, &pp.personModel)
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		var pp personModelBinded
+		assert.NoError(t, db.Delete(ctx, p1))
+		assert.Error(t, db.Select(ctx, &pp, p1.GetID()))
+	})
+
+	t.Run("hardDelete", func(t *testing.T) {
+		var pp personModelBinded
+		assert.NoError(t, db.HardDelete(ctx, p1))
+		assert.Error(t, db.Select(ctx, &pp, p1.GetID()))
+	})
+
+	t.Run("exec (clear table)", func(t *testing.T) {
+		_, err := db.Exec(ctx, "DELETE FROM person_test")
+		assert.NoError(t, err)
+	})
+}
+
+func TestTXQueriesRebind(t *testing.T) {
+	db, err := New(postgresDataSource, WithRebindModel())
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, db.Close())
+	})
+
+	p1 := &personModelBinded{
+		personModel: personModel{
+			Name:  "Lucky Luke",
+			Email: NullString("lucky@example.com"),
+		},
+	}
+
+	ctx := context.Background()
+	t.Run("insert", func(t *testing.T) {
+		assert.NoError(t, db.Insert(ctx, p1))
+	})
+
+	t.Run("select", func(t *testing.T) {
+		var pp personModelBinded
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+		assert.NoError(t, tx.Select(&pp, p1.GetID()))
+		assertEqualPerson(t, &p1.personModel, &pp.personModel)
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		var pp personModelBinded
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+		assert.NoError(t, tx.Delete(p1))
+		assert.Error(t, tx.Select(&pp, p1.GetID()))
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("hardDelete", func(t *testing.T) {
+		var pp personModelBinded
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+		assert.NoError(t, tx.HardDelete(p1))
+		assert.Error(t, tx.Select(&pp, p1.GetID()))
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("exec (clear table)", func(t *testing.T) {
+		_, err := db.Exec(ctx, "DELETE FROM person_test")
+		assert.NoError(t, err)
+	})
 }
 
 func TestDB_Rebind(t *testing.T) {
+	db, err := New(postgresDataSource)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, db.Close())
+	})
+
 	type fields struct {
 		db    *sqlx.DB
 		clock clock.Clock
@@ -700,7 +828,8 @@ func TestDB_Rebind(t *testing.T) {
 		args   args
 		want   string
 	}{
-		// TODO: Add test cases.
+		{"ok", fields{db.db, db.clock}, args{"SELECT * FROM person_test WHERE id = ?"}, "SELECT * FROM person_test WHERE id = $1"},
+		{"ok multiple", fields{db.db, db.clock}, args{"SELECT * FROM person_test WHERE name = ? AND email = ?"}, "SELECT * FROM person_test WHERE name = $1 AND email = $2"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
