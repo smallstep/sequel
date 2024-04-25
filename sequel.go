@@ -23,13 +23,15 @@ const MaxOpenConnections = 100
 // DB is the type that holds the database client and adds support for database
 // operations on a Model.
 type DB struct {
-	db    *sqlx.DB
-	clock clock.Clock
+	db            *sqlx.DB
+	clock         clock.Clock
+	doRebindModel bool
 }
 
 type options struct {
-	Clock      clock.Clock
-	DriverName string
+	Clock       clock.Clock
+	DriverName  string
+	RebindModel bool
 }
 
 // Option is the type of options that can be used to modify the database. This
@@ -52,11 +54,20 @@ func WithDriver(driverName string) Option {
 	}
 }
 
+// WithRebindModel enables query rebind on unnamed queries from the model, the
+// queries from Select(), Delete(), and HardDelete() methods.
+func WithRebindModel() Option {
+	return func(o *options) {
+		o.RebindModel = true
+	}
+}
+
 // New creates a new DB. It will fail if it cannot ping it.
 func New(dataSourceName string, opts ...Option) (*DB, error) {
 	options := &options{
-		Clock:      clock.New(),
-		DriverName: "pgx/v5",
+		Clock:       clock.New(),
+		DriverName:  "pgx/v5",
+		RebindModel: false,
 	}
 	for _, fn := range opts {
 		fn(options)
@@ -69,8 +80,9 @@ func New(dataSourceName string, opts ...Option) (*DB, error) {
 	}
 	db.SetMaxOpenConns(MaxOpenConnections)
 	return &DB{
-		db:    db,
-		clock: options.Clock,
+		db:            db,
+		clock:         options.Clock,
+		doRebindModel: options.RebindModel,
 	}, nil
 }
 
@@ -132,6 +144,13 @@ func (d *DB) Close() error {
 // Rebind transforms a query from `?` to the DB driver's bind type.
 func (d *DB) Rebind(query string) string {
 	return d.db.Rebind(query)
+}
+
+func (d *DB) rebindModel(query string) string {
+	if d.doRebindModel {
+		return d.Rebind(query)
+	}
+	return query
 }
 
 // Query executes a query that returns rows, typically a SELECT. The args are
@@ -216,7 +235,7 @@ func (d *DB) GetAll(ctx context.Context, dest any, query string, args ...any) er
 
 // Select populates the given model with the result of a select by id query.
 func (d *DB) Select(ctx context.Context, dest Model, id string) error {
-	return d.db.GetContext(ctx, dest, dest.Select(), id)
+	return d.db.GetContext(ctx, dest, d.rebindModel(dest.Select()), id)
 }
 
 // Insert inserts the given model in the database.
@@ -310,7 +329,7 @@ func (d *DB) Update(ctx context.Context, arg Model) error {
 // column to the current date.
 func (d *DB) Delete(ctx context.Context, arg Model) error {
 	t0 := d.clock.Now()
-	r, err := d.db.ExecContext(ctx, arg.Delete(), t0, arg.GetID())
+	r, err := d.db.ExecContext(ctx, d.rebindModel(arg.Delete()), t0, arg.GetID())
 	if err != nil {
 		return err
 	}
@@ -324,7 +343,7 @@ func (d *DB) Delete(ctx context.Context, arg Model) error {
 
 // HardDelete deletes the given model from the database.
 func (d *DB) HardDelete(ctx context.Context, arg ModelWithHardDelete) error {
-	r, err := d.db.ExecContext(ctx, arg.HardDelete(), arg.GetID())
+	r, err := d.db.ExecContext(ctx, d.rebindModel(arg.HardDelete()), arg.GetID())
 	if err != nil {
 		return err
 	}
@@ -333,8 +352,9 @@ func (d *DB) HardDelete(ctx context.Context, arg ModelWithHardDelete) error {
 
 // Tx is an wrapper around sqlx.Tx with extra functionality.
 type Tx struct {
-	tx    *sqlx.Tx
-	clock clock.Clock
+	tx            *sqlx.Tx
+	clock         clock.Clock
+	doRebindModel bool
 }
 
 // Begin begins a transaction and returns a new Tx.
@@ -344,14 +364,22 @@ func (d *DB) Begin(ctx context.Context) (*Tx, error) {
 		return nil, err
 	}
 	return &Tx{
-		tx:    tx,
-		clock: d.clock,
+		tx:            tx,
+		clock:         d.clock,
+		doRebindModel: d.doRebindModel,
 	}, nil
 }
 
 // Rebind transforms a query from QUESTION to the DB driver's bind type.
 func (t *Tx) Rebind(query string) string {
 	return t.tx.Rebind(query)
+}
+
+func (t *Tx) rebindModel(query string) string {
+	if t.doRebindModel {
+		return t.Rebind(query)
+	}
+	return query
 }
 
 // Commit commits the transaction.
@@ -425,6 +453,11 @@ func (t *Tx) NamedExec(query string, arg any) (sql.Result, error) {
 	return t.tx.NamedExec(query, arg)
 }
 
+// Select populates the given model with the result of a select by id query.
+func (t *Tx) Select(dest Model, id string) error {
+	return t.tx.Get(dest, t.rebindModel(dest.Select()), id)
+}
+
 // Get populates the given model for the result of the given select query.
 func (t *Tx) Get(dest Model, query string, args ...any) error {
 	return t.tx.Get(dest, query, args...)
@@ -481,7 +514,7 @@ func (t *Tx) Update(arg Model) error {
 // Delete adds a new soft-delete query in the transaction.
 func (t *Tx) Delete(arg Model) error {
 	t0 := t.clock.Now()
-	r, err := t.tx.Exec(arg.Delete(), t0, arg.GetID())
+	r, err := t.tx.Exec(t.rebindModel(arg.Delete()), t0, arg.GetID())
 	if err != nil {
 		return err
 	}
@@ -495,7 +528,7 @@ func (t *Tx) Delete(arg Model) error {
 
 // HardDelete ads a new hard-delete query in the transaction.
 func (t *Tx) HardDelete(arg ModelWithHardDelete) error {
-	r, err := t.tx.Exec(arg.HardDelete(), arg.GetID())
+	r, err := t.tx.Exec(t.rebindModel(arg.HardDelete()), arg.GetID())
 	if err != nil {
 		return err
 	}
