@@ -23,12 +23,13 @@ const (
 var postgresDataSource string
 
 func withSchemaSQL() testcontainers.CustomizeRequestOption {
-	return func(req *testcontainers.GenericContainerRequest) {
+	return func(req *testcontainers.GenericContainerRequest) error {
 		req.Files = append(req.Files, testcontainers.ContainerFile{
 			HostFilePath:      filepath.Join("testdata", "schema.sql"),
 			ContainerFilePath: "/tmp/schema.sql",
 			FileMode:          0644,
 		})
+		return nil
 	}
 }
 
