@@ -26,6 +26,7 @@ type DB struct {
 	db            *sqlx.DB
 	clock         clock.Clock
 	doRebindModel bool
+	driverName    string
 }
 
 type options struct {
@@ -83,6 +84,7 @@ func New(dataSourceName string, opts ...Option) (*DB, error) {
 		db:            db,
 		clock:         options.Clock,
 		doRebindModel: options.RebindModel,
+		driverName:    options.DriverName,
 	}, nil
 }
 
@@ -139,6 +141,11 @@ func RowsAffected(res sql.Result, n int64) error {
 // waits for all queries that have started processing on the server to finish.
 func (d *DB) Close() error {
 	return d.db.Close()
+}
+
+// Driver returns the name of the driver used.
+func (d *DB) Driver() string {
+	return d.driverName
 }
 
 // Rebind transforms a query from `?` to the DB driver's bind type.

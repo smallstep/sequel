@@ -841,3 +841,15 @@ func TestDB_Rebind(t *testing.T) {
 		})
 	}
 }
+
+func TestDB_Driver(t *testing.T) {
+	db, err := New(postgresDataSource)
+	require.NoError(t, err)
+	assert.Equal(t, "pgx/v5", db.Driver())
+	assert.NoError(t, db.Close())
+
+	db, err = New(postgresDataSource, WithDriver("pgx/v5"))
+	require.NoError(t, err)
+	assert.Equal(t, "pgx/v5", db.Driver())
+	assert.NoError(t, db.Close())
+}
