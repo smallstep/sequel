@@ -47,8 +47,7 @@ func TestMain(m *testing.M) {
 	}
 
 	ctx := context.Background()
-	postgresContainer, err := postgres.RunContainer(ctx,
-		testcontainers.WithImage(postgresImage),
+	postgresContainer, err := postgres.Run(ctx, postgresImage,
 		postgres.WithDatabase(dbName),
 		postgres.WithUsername(dbUser),
 		postgres.WithPassword(dbPassword),
