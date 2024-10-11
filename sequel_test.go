@@ -123,6 +123,7 @@ func TestNew(t *testing.T) {
 		{"ok with clock", args{postgresDataSource, []Option{WithClock(clock.NewMock(time.Now()))}}, assert.NoError},
 		{"ok with driver", args{postgresDataSource, []Option{WithDriver("pgx/v5")}}, assert.NoError},
 		{"ok with rebindModel", args{postgresDataSource, []Option{WithRebindModel()}}, assert.NoError},
+		{"ok with maxConnections", args{postgresDataSource, []Option{WithMaxOpenConnections(10)}}, assert.NoError},
 		{"fail ping", args{strings.ReplaceAll(postgresDataSource, dbUser, "foo"), nil}, assert.Error},
 	}
 	for _, tt := range tests {
@@ -132,6 +133,49 @@ func TestNew(t *testing.T) {
 			if db != nil {
 				assert.NoError(t, db.Close())
 			}
+		})
+	}
+}
+
+func TestNewDB(t *testing.T) {
+	testTime := time.Now()
+
+	db, err := sql.Open("pgx/v5", postgresDataSource)
+	require.NoError(t, err)
+	closedDB, err := sql.Open("pgx/v5", postgresDataSource)
+	require.NoError(t, err)
+	require.NoError(t, closedDB.Close())
+
+	type args struct {
+		db         *sql.DB
+		driverName string
+		opts       []Option
+	}
+	tests := []struct {
+		name      string
+		args      args
+		want      *DB
+		assertion assert.ErrorAssertionFunc
+	}{
+		{"ok", args{db, "pgx/v5", nil}, &DB{
+			db:            sqlx.NewDb(db, "pgx/v5"),
+			clock:         clock.New(),
+			doRebindModel: false,
+			driverName:    "pgx/v5",
+		}, assert.NoError},
+		{"ok with options", args{db, "pgx/v5", []Option{WithClock(clock.NewMock(testTime)), WithDriver("pgx"), WithRebindModel()}}, &DB{
+			db:            sqlx.NewDb(db, "pgx"),
+			clock:         clock.NewMock(testTime),
+			doRebindModel: true,
+			driverName:    "pgx",
+		}, assert.NoError},
+		{"fail ping", args{closedDB, "pgx/v5", nil}, nil, assert.Error},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := NewDB(tt.args.db, tt.args.driverName, tt.args.opts...)
+			tt.assertion(t, err)
+			assert.Equal(t, tt.want, got)
 		})
 	}
 }
@@ -852,4 +896,18 @@ func TestDB_Driver(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "pgx/v5", db.Driver())
 	assert.NoError(t, db.Close())
+}
+
+func TestDB_DB(t *testing.T) {
+	sdb, err := New(postgresDataSource)
+	require.NoError(t, err)
+	assert.Equal(t, sdb.db.DB, sdb.DB())
+	assert.NoError(t, sdb.Close())
+
+	db, err := sql.Open("pgx/v5", postgresDataSource)
+	require.NoError(t, err)
+	sdb, err = NewDB(db, "pgx/v5")
+	require.NoError(t, err)
+	assert.Equal(t, db, sdb.DB())
+	assert.NoError(t, sdb.Close())
 }

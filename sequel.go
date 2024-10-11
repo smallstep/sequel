@@ -30,9 +30,26 @@ type DB struct {
 }
 
 type options struct {
-	Clock       clock.Clock
-	DriverName  string
-	RebindModel bool
+	Clock              clock.Clock
+	DriverName         string
+	RebindModel        bool
+	MaxOpenConnections int
+}
+
+func newOptions(driverName string) *options {
+	return &options{
+		Clock:              clock.New(),
+		DriverName:         driverName,
+		RebindModel:        false,
+		MaxOpenConnections: MaxOpenConnections,
+	}
+}
+
+func (o *options) apply(opts []Option) *options {
+	for _, fn := range opts {
+		fn(o)
+	}
+	return o
 }
 
 // Option is the type of options that can be used to modify the database. This
@@ -63,25 +80,48 @@ func WithRebindModel() Option {
 	}
 }
 
+// WithMaxOpenConnections sets the maximum number of open connections to the
+// database. If it is not set it will use [MaxOpenConnections] (100).
+func WithMaxOpenConnections(n int) Option {
+	return func(o *options) {
+		o.MaxOpenConnections = n
+	}
+}
+
 // New creates a new DB. It will fail if it cannot ping it.
 func New(dataSourceName string, opts ...Option) (*DB, error) {
-	options := &options{
-		Clock:       clock.New(),
-		DriverName:  "pgx/v5",
-		RebindModel: false,
-	}
-	for _, fn := range opts {
-		fn(options)
-	}
+	options := newOptions("pgx/v5").apply(opts)
 
 	// Connect opens the database and verifies with a ping
 	db, err := sqlx.Connect(options.DriverName, dataSourceName)
 	if err != nil {
 		return nil, fmt.Errorf("error connecting to the database: %w", err)
 	}
-	db.SetMaxOpenConns(MaxOpenConnections)
+	db.SetMaxOpenConns(options.MaxOpenConnections)
+
 	return &DB{
 		db:            db,
+		clock:         options.Clock,
+		doRebindModel: options.RebindModel,
+		driverName:    options.DriverName,
+	}, nil
+}
+
+// NewDB creates a new DB wrapping the opened database handle with the given
+// driverName. It will fail if it cannot ping it.
+func NewDB(db *sql.DB, driverName string, opts ...Option) (*DB, error) {
+	options := newOptions(driverName).apply(opts)
+
+	// Wrap an opened *sql.DB and verify the connection with a ping
+	dbx := sqlx.NewDb(db, options.DriverName)
+	if err := dbx.Ping(); err != nil {
+		dbx.Close()
+		return nil, fmt.Errorf("error connecting to the database: %w", err)
+	}
+	dbx.SetMaxOpenConns(options.MaxOpenConnections)
+
+	return &DB{
+		db:            dbx,
 		clock:         options.Clock,
 		doRebindModel: options.RebindModel,
 		driverName:    options.DriverName,
@@ -146,6 +186,11 @@ func (d *DB) Close() error {
 // Driver returns the name of the driver used.
 func (d *DB) Driver() string {
 	return d.driverName
+}
+
+// DB returns the embedded *sql.DB.
+func (d *DB) DB() *sql.DB {
+	return d.db.DB
 }
 
 // Rebind transforms a query from `?` to the DB driver's bind type.
