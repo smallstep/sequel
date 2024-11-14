@@ -402,6 +402,11 @@ func (d *DB) HardDelete(ctx context.Context, arg ModelWithHardDelete) error {
 	return RowsAffected(r, 1)
 }
 
+// Prepare creates a prepared statement.
+func (d *DB) Prepare(ctx context.Context, query string) (*sql.Stmt, error) {
+	return d.db.PrepareContext(ctx, query)
+}
+
 // Tx is an wrapper around sqlx.Tx with extra functionality.
 type Tx struct {
 	tx            *sqlx.Tx
@@ -585,4 +590,9 @@ func (t *Tx) HardDelete(arg ModelWithHardDelete) error {
 		return err
 	}
 	return RowsAffected(r, 1)
+}
+
+// Prepare creates a prepared statement
+func (t *Tx) Prepare(query string) (*sql.Stmt, error) {
+	return t.tx.Prepare(query)
 }
