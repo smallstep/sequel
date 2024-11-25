@@ -5,7 +5,7 @@ go 1.22
 require (
 	github.com/go-sqlx/sqlx v1.3.8
 	github.com/jackc/pgx/v5 v5.7.1
-	github.com/stretchr/testify v1.9.0
+	github.com/stretchr/testify v1.10.0
 	github.com/testcontainers/testcontainers-go v0.34.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.34.0
 	go.step.sm/qb v1.4.0
