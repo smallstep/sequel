@@ -20,5 +20,6 @@ jobs:
       only-latest-golang: true
       run-build: false
       run-codeql: true
+      codeql-build-cmd: 'go build ./...'
       test-command: 'V=1 make test'
     secrets: inherit
