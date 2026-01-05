@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-sqlx/sqlx"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/stretchr/testify/assert"
@@ -500,6 +501,10 @@ func TestTxQueries(t *testing.T) {
 			Email: NullString("jolly@example.com"),
 		},
 	}
+	p3 := &personModel{
+		Name:  "Kelly Klimber",
+		Email: NullString("kelly@example.com"),
+	}
 
 	t.Run("rebind", func(t *testing.T) {
 		tx, err := db.Begin(ctx)
@@ -543,11 +548,37 @@ func TestTxQueries(t *testing.T) {
 		assert.NoError(t, tx.Commit())
 	})
 
+	t.Run("queryContext", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		rows, err := tx.QueryContext(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.NoError(t, err)
+		for rows.Next() {
+			var p personModel
+			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+			assertEqualPerson(t, p1, &p)
+		}
+		assert.NoError(t, rows.Err())
+		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
+		assert.NoError(t, tx.Commit())
+	})
+
 	t.Run("queryRow", func(t *testing.T) {
 		var p personModel
 		tx, err := db.Begin(ctx)
 		require.NoError(t, err)
 		row := tx.QueryRow("SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		assertEqualPerson(t, p1, &p)
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("queryRowContext", func(t *testing.T) {
+		var p personModel
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		row := tx.QueryRowContext(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
 		assertEqualPerson(t, p1, &p)
@@ -736,6 +767,21 @@ func TestTxQueries(t *testing.T) {
 
 		res, err := tx.Exec(personExecQ, p2.ID, p2.CreatedAt, p2.UpdatedAt, nil, p2.Name, p2.Email)
 		assert.NoError(t, err)
+		n, err := res.RowsAffected()
+		assert.NoError(t, err)
+		assert.Equal(t, int64(1), n)
+		assert.NoError(t, tx.Commit())
+	})
+
+	t.Run("execContext", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.Error(t, tx.Rollback())
+		}()
+
+		res, err := tx.Exec(personExecQ, uuid.NewString(), p3.CreatedAt, p3.UpdatedAt, nil, p3.Name, p3.Email)
+		require.NoError(t, err)
 		n, err := res.RowsAffected()
 		assert.NoError(t, err)
 		assert.Equal(t, int64(1), n)
