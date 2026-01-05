@@ -455,6 +455,11 @@ func (t *Tx) Query(query string, args ...any) (*sql.Rows, error) {
 	return t.tx.Query(query, args...)
 }
 
+// QueryContext works like Query but with context.
+func (t *Tx) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	return t.tx.QueryContext(ctx, query, args...)
+}
+
 // QueryRow executes a query that is expected to return at most one row.
 // QueryRowContext always returns a non-nil value. Errors are deferred until
 // Row's Scan method is called.
@@ -466,10 +471,20 @@ func (t *Tx) QueryRow(query string, args ...any) *sql.Row {
 	return t.tx.QueryRow(query, args...)
 }
 
+// QueryRowContext works like QueryRow but with context.
+func (t *Tx) QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row {
+	return t.tx.QueryRowContext(ctx, query, args...)
+}
+
 // Exec executes a query without returning any rows. The args are for any
 // placeholder parameters in the query.
 func (t *Tx) Exec(query string, args ...any) (sql.Result, error) {
 	return t.tx.Exec(query, args...)
+}
+
+// ExecContext works like Exec but with context.
+func (t *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return t.tx.ExecContext(ctx, query, args...)
 }
 
 // Query executes a query that returns rows, typically a SELECT. The query is
