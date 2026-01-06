@@ -447,12 +447,12 @@ func (t *Tx) Commit() error {
 		return err
 	}
 	for _, fn := range t.oncommit {
-		fn()
+		go fn()
 	}
 	return nil
 }
 
-// PostCommit registers a function to be called after a successful commit.
+// PostCommit registers a function to be called asynchronously after a successful commit.
 func (t *Tx) PostCommit(fn func()) {
 	t.oncommit = append(t.oncommit, fn)
 }
