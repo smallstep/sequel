@@ -412,6 +412,7 @@ type Tx struct {
 	tx            *sqlx.Tx
 	clock         clock.Clock
 	doRebindModel bool
+	oncommit      []func()
 }
 
 // Begin begins a transaction and returns a new Tx.
@@ -441,7 +442,19 @@ func (t *Tx) rebindModel(query string) string {
 
 // Commit commits the transaction.
 func (t *Tx) Commit() error {
-	return t.tx.Commit()
+	err := t.tx.Commit()
+	if err != nil {
+		return err
+	}
+	for _, fn := range t.oncommit {
+		fn()
+	}
+	return nil
+}
+
+// PostCommit registers a function to be called after a successful commit.
+func (t *Tx) PostCommit(fn func()) {
+	t.oncommit = append(t.oncommit, fn)
 }
 
 // Rollback aborts the transaction.
