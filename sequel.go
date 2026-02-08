@@ -229,14 +229,14 @@ func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 	return d.db.ExecContext(ctx, query, args...)
 }
 
-// Query executes a query that returns rows, typically a SELECT. The query is
+// RebindQuery executes a query that returns rows, typically a SELECT. The query is
 // rebound from `?` to the DB driver's bind type. The args are for any
 // placeholder parameters in the query.
 func (d *DB) RebindQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return d.db.QueryContext(ctx, d.db.Rebind(query), args...)
 }
 
-// QueryRow executes a query that is expected to return at most one row. The
+// RebindQueryRow executes a query that is expected to return at most one row. The
 // query is rebound from `?` to the DB driver's bind type. QueryRowContext
 // always returns a non-nil value. Errors are deferred until Row's Scan method
 // is called.
@@ -248,7 +248,7 @@ func (d *DB) RebindQueryRow(ctx context.Context, query string, args ...any) *sql
 	return d.db.QueryRowContext(ctx, d.db.Rebind(query), args...)
 }
 
-// Exec executes a query without returning any rows. The query is rebound from
+// RebindExec executes a query without returning any rows. The query is rebound from
 // `?` to the DB driver's bind type. The args are for any placeholder parameters
 // in the query.
 func (d *DB) RebindExec(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -504,14 +504,14 @@ func (t *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.Re
 	return t.tx.ExecContext(ctx, query, args...)
 }
 
-// Query executes a query that returns rows, typically a SELECT. The query is
+// RebindQuery executes a query that returns rows, typically a SELECT. The query is
 // rebound from `?` to the DB driver's bind type. The args are for any
 // placeholder parameters in the query.
 func (t *Tx) RebindQuery(query string, args ...any) (*sql.Rows, error) {
 	return t.tx.Query(t.tx.Rebind(query), args...)
 }
 
-// QueryRow executes a query that is expected to return at most one row. The
+// RebindQueryRow executes a query that is expected to return at most one row. The
 // query is rebound from `?` to the DB driver's bind type. QueryRowContext
 // always returns a non-nil value. Errors are deferred until Row's Scan method
 // is called.
@@ -523,7 +523,7 @@ func (t *Tx) RebindQueryRow(query string, args ...any) *sql.Row {
 	return t.tx.QueryRow(t.tx.Rebind(query), args...)
 }
 
-// Exec executes a query without returning any rows. The query is rebound from
+// RebindExec executes a query without returning any rows. The query is rebound from
 // `?` to the DB driver's bind type. The args are for any placeholder parameters
 // in the query.
 func (t *Tx) RebindExec(query string, args ...any) (sql.Result, error) {
