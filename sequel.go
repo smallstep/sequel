@@ -122,6 +122,7 @@ func NewDB(db *sql.DB, driverName string, opts ...Option) (*DB, error) {
 
 	return &DB{
 		db:            dbx,
+		dbRRs:         &readReplicas{},
 		clock:         options.Clock,
 		doRebindModel: options.RebindModel,
 		driverName:    options.DriverName,
@@ -279,6 +280,9 @@ func (d *DB) GetAll(ctx context.Context, dest any, query string, args ...any) er
 	if err != nil {
 		return err
 	}
+
+	defer rows.Close()
+
 	if err := rows.Err(); err != nil {
 		return err
 	}
