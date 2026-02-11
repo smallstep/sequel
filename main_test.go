@@ -57,8 +57,8 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// createPostgresContainers creates 3 databases as containers. The first is intended to mimick a master database and
-// the last 2 are intended to mimick read replicas.
+// createPostgresContainers creates 3 databases as containers. The first is intended to mimic a master database and
+// the last 2 are intended to mimic read replicas.
 // A []func() is returned to cleanups.
 // Package-level connction strings are set.
 func createPostgresContainers(ctx context.Context) ([]func(), error) {
