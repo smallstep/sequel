@@ -60,7 +60,7 @@ func TestMain(m *testing.M) {
 // createPostgresContainers creates 3 databases as containers. The first is intended to mimic a master database and
 // the last 2 are intended to mimic read replicas.
 // A []func() is returned to cleanups.
-// Package-level connction strings are set.
+// Package-level connection strings are set.
 func createPostgresContainers(ctx context.Context) ([]func(), error) {
 	// Database connection strings are the same, except the port
 	connString := func(port string) string {
