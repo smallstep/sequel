@@ -53,6 +53,7 @@ func TestMain(m *testing.M) {
 		fmt.Printf("did not create postgres containers: %v\n", err)
 	}
 
+	// nolint:gocritic // The docs for Run specify that the returned int is to be passed to os.Exit
 	os.Exit(m.Run())
 }
 
