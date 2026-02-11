@@ -71,8 +71,17 @@ func (rr *readReplicas) Close() {
 	rr.m.Lock()
 	defer rr.m.Unlock()
 
+	// If this instance has no replicas, current would be nil
+	if rr.current == nil {
+		return
+	}
+
 	first := rr.current
-	for c := first; c != first; c = c.next {
+	for c := first; ; c = c.next {
 		c.db.Close()
+
+		if c.next == first {
+			break
+		}
 	}
 }
