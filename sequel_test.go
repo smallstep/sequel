@@ -160,12 +160,14 @@ func TestNewDB(t *testing.T) {
 	}{
 		{"ok", args{db, "pgx/v5", nil}, &DB{
 			db:            sqlx.NewDb(db, "pgx/v5"),
+			dbRRs:         &readReplicas{},
 			clock:         clock.New(),
 			doRebindModel: false,
 			driverName:    "pgx/v5",
 		}, assert.NoError},
 		{"ok with options", args{db, "pgx/v5", []Option{WithClock(clock.NewMock(testTime)), WithDriver("pgx"), WithRebindModel()}}, &DB{
 			db:            sqlx.NewDb(db, "pgx"),
+			dbRRs:         &readReplicas{},
 			clock:         clock.NewMock(testTime),
 			doRebindModel: true,
 			driverName:    "pgx",
@@ -240,11 +242,27 @@ func TestIsUniqueViolation(t *testing.T) {
 }
 
 func TestDBQueries(t *testing.T) {
+	// Create single DB source
 	db, err := New(postgresDataSource)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, db.Close())
 	})
+
+	// Create DB source with two read replicas
+	dbWithRRs, err := New(postgresDataSource)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		assert.NoError(t, dbWithRRs.Close())
+	})
+
+	rr1, err := sqlx.Open("pgx/v5", postgresDataSourceRR1)
+	assert.NoError(t, err)
+	dbWithRRs.WithReadReplica(rr1)
+
+	rr2, err := sqlx.Open("pgx/v5", postgresDataSourceRR2)
+	assert.NoError(t, err)
+	dbWithRRs.WithReadReplica(rr2)
 
 	p1 := &personModel{
 		Name:  "Lucky Luke",
@@ -323,12 +341,40 @@ func TestDBQueries(t *testing.T) {
 		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
 	})
 
+	t.Run("query RR (no RRs)", func(t *testing.T) {
+		_, err := db.QueryRR(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.Error(t, err, ErrorNoReadReplicaConnection)
+	})
+
+	t.Run("query RR", func(t *testing.T) {
+		rows, err := dbWithRRs.QueryRR(ctx, "SELECT * FROM person_test WHERE email = $1", "read1@replica.com")
+		if err != nil {
+			t.Fatalf("expecting no error, got %v", err)
+		}
+		for rows.Next() {
+			var p personModel
+			assert.NoError(t, rows.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+			assert.Equal(t, p.Email.String, "read1@replica.com")
+		}
+		assert.NoError(t, rows.Err())
+		assert.NoError(t, rows.Close()) //nolint:sqlclosecheck // no defer for testing purposes
+	})
+
 	t.Run("queryRow", func(t *testing.T) {
 		var p personModel
 		row := db.QueryRow(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
 		assertEqualPerson(t, p1, &p)
+	})
+
+	t.Run("queryRow RR", func(t *testing.T) {
+		var p personModel
+		row, err := dbWithRRs.QueryRowRR(ctx, "SELECT * FROM person_test WHERE email = $1", "read2@replica.com")
+		assert.NoError(t, err)
+		assert.NoError(t, row.Err())
+		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
+		assert.Equal(t, p.Email.String, "read2@replica.com")
 	})
 
 	t.Run("rebindQuery", func(t *testing.T) {
@@ -385,12 +431,27 @@ func TestDBQueries(t *testing.T) {
 		assertEqualPerson(t, &personModel{}, &pp2)
 	})
 
+	t.Run("get RR", func(t *testing.T) {
+		var p personModel
+		assert.NoError(t, dbWithRRs.GetRR(ctx, &p, "SELECT * FROM person_test WHERE email = $1", "read3@replica.com"))
+		assert.Equal(t, p.Email.String, "read3@replica.com")
+	})
+
 	t.Run("getAll", func(t *testing.T) {
 		var ap []*personModel
 		assert.NoError(t, db.GetAll(ctx, &ap, "SELECT * FROM person_test"))
 		assertEqualPersons(t, []*personModel{p1, p2, p3, &p4.personModel, &p5.personModel}, ap)
 		assert.NoError(t, db.GetAll(ctx, &ap, "SELECT * FROM person_test WHERE deleted_at IS NOT NULL"))
 		assertEqualPersons(t, []*personModel{}, ap)
+	})
+
+	t.Run("getAll RR", func(t *testing.T) {
+		var ap []*personModel
+		assert.NoError(t, dbWithRRs.GetAllRR(ctx, &ap, "SELECT * FROM person_test"))
+		assert.Equal(t, len(ap), 3)
+		assert.Equal(t, ap[0].Email.String, "read1@replica.com")
+		assert.Equal(t, ap[1].Email.String, "read2@replica.com")
+		assert.Equal(t, ap[2].Email.String, "read3@replica.com")
 	})
 
 	t.Run("select", func(t *testing.T) {

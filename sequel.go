@@ -24,6 +24,7 @@ const MaxOpenConnections = 100
 // operations on a Model.
 type DB struct {
 	db            *sqlx.DB
+	dbRRs         *readReplicas
 	clock         clock.Clock
 	doRebindModel bool
 	driverName    string
@@ -101,6 +102,7 @@ func New(dataSourceName string, opts ...Option) (*DB, error) {
 
 	return &DB{
 		db:            db,
+		dbRRs:         &readReplicas{},
 		clock:         options.Clock,
 		doRebindModel: options.RebindModel,
 		driverName:    options.DriverName,
@@ -178,9 +180,17 @@ func RowsAffected(res sql.Result, n int64) error {
 	return fmt.Errorf("unexpected number of rows: got %d, want %d", got, n)
 }
 
+// WithReadReplica adds a read replica connection to the [DB].
+func (d *DB) WithReadReplica(conn *sqlx.DB) {
+	if conn != nil {
+		d.dbRRs.add(conn)
+	}
+}
+
 // Close closes the database and prevents new queries from starting. Close then
 // waits for all queries that have started processing on the server to finish.
 func (d *DB) Close() error {
+	d.dbRRs.Close()
 	return d.db.Close()
 }
 
@@ -212,6 +222,17 @@ func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, e
 	return d.db.QueryContext(ctx, query, args...)
 }
 
+// QueryRR executes a query against a read replica. Queries that are not SELECTs may not work.
+// The args are for any placeholder parameters in the query.
+func (d *DB) QueryRR(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	db, err := d.dbRRs.next()
+	if err != nil {
+		return nil, fmt.Errorf("did not get read replica connection: %w", err)
+	}
+
+	return db.QueryContext(ctx, query, args...)
+}
+
 // QueryRow executes a query that is expected to return at most one row.
 // QueryRowContext always returns a non-nil value. Errors are deferred until
 // Row's Scan method is called.
@@ -221,6 +242,22 @@ func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, e
 // rest.
 func (d *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return d.db.QueryRowContext(ctx, query, args...)
+}
+
+// QueryRowRR executes a query that is expected to return at most one row against a read replica.
+// QueryRowContext always returns a non-nil value. Errors are deferred until
+// Row's Scan method is called.
+//
+// If the query selects no rows, the *Row's Scan will return ErrNoRows.
+// Otherwise, the *Row's Scan scans the first selected row and discards the
+// rest.
+func (d *DB) QueryRowRR(ctx context.Context, query string, args ...any) (*sql.Row, error) {
+	db, err := d.dbRRs.next()
+	if err != nil {
+		return nil, fmt.Errorf("did not get read replica connection: %w", err)
+	}
+
+	return db.QueryRowContext(ctx, query, args...), nil
 }
 
 // Exec executes a query without returning any rows. The args are for any
@@ -272,11 +309,43 @@ func (d *DB) Get(ctx context.Context, dest Model, query string, args ...any) err
 	return d.db.GetContext(ctx, dest, query, args...)
 }
 
+// GetRR populates the given model for the result of the given select query against a read replica.
+func (d *DB) GetRR(ctx context.Context, dest Model, query string, args ...any) error {
+	db, err := d.dbRRs.next()
+	if err != nil {
+		return fmt.Errorf("did not get read replica connection: %w", err)
+	}
+
+	return db.GetContext(ctx, dest, query, args...)
+}
+
 // GetAll populates the given destination with all the results of the given
 // select query. The method will fail if the destination is not a pointer to a
 // slice.
 func (d *DB) GetAll(ctx context.Context, dest any, query string, args ...any) error {
 	rows, err := d.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return err
+	}
+
+	defer rows.Close()
+
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return sqlx.StructScan(rows, dest)
+}
+
+// GetAllRR populates the given destination with all the results of the given
+// select query (from a read replica). The method will fail if the destination is not a pointer to a
+// slice.
+func (d *DB) GetAllRR(ctx context.Context, dest any, query string, args ...any) error {
+	db, err := d.dbRRs.next()
+	if err != nil {
+		return fmt.Errorf("did not get read replica connection: %w", err)
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
