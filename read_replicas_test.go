@@ -66,7 +66,7 @@ func Test_readReplicas_next(t *testing.T) {
 			name:    "empty readReplicas",
 			rr:      emptyRR,
 			want:    nil,
-			wantErr: ErrorNoReadReplicaConnection,
+			wantErr: ErrNoReadReplicaConnection,
 		},
 		{
 			name:    "one read replica",

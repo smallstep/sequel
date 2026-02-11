@@ -7,7 +7,7 @@ import (
 	"github.com/go-sqlx/sqlx"
 )
 
-var ErrorNoReadReplicaConnection = errors.New("no read replica connections")
+var ErrNoReadReplicaConnection = errors.New("no read replica connections")
 
 type readReplica struct {
 	db *sqlx.DB
@@ -18,7 +18,7 @@ type readReplica struct {
 // readReplicas contains a set of DB connections. It is intended to give fair round robin access
 // through a circular singularly linked list.
 //
-// Replicas are appended after the current one. The intented use is to build the replica set before
+// Replicas are appended after the current one. The intended use is to build the replica set before
 // querying, but all operations are concurrent-safe.
 type readReplicas struct {
 	m sync.Mutex
@@ -56,7 +56,7 @@ func (rr *readReplicas) next() (*sqlx.DB, error) {
 	defer rr.m.Unlock()
 
 	if rr.current == nil {
-		return nil, ErrorNoReadReplicaConnection
+		return nil, ErrNoReadReplicaConnection
 	}
 
 	c := rr.current

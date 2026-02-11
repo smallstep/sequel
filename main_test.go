@@ -95,7 +95,7 @@ func createPostgresContainers(ctx context.Context) ([]func(), error) {
 	return cleanups, nil
 }
 
-// createPostgresContainer creates a single postgres container on the specifed port
+// createPostgresContainer creates a single postgres container on the specified port
 func createPostgresContainer(ctx context.Context, initFilename string) (func(), string, error) {
 	postgresContainer, err := postgres.Run(ctx, postgresImage,
 		postgres.WithDatabase(dbName),

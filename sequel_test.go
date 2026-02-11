@@ -342,8 +342,9 @@ func TestDBQueries(t *testing.T) {
 	})
 
 	t.Run("query RR (no RRs)", func(t *testing.T) {
-		_, err := db.QueryRR(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
-		assert.Error(t, err, ErrorNoReadReplicaConnection)
+		rows, err := db.QueryRR(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.Error(t, err, ErrNoReadReplicaConnection)
+		assert.Nil(t, rows)
 	})
 
 	t.Run("query RR", func(t *testing.T) {
