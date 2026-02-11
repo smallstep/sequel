@@ -125,7 +125,7 @@ func Test_readReplicas_next(t *testing.T) {
 	}
 }
 
-// rrContains is atest helper to see if a [readReplicas] contains all the connections passed in
+// rrContains is a test helper to see if a [readReplicas] contains all the connections passed in
 func rrContains(t *testing.T, rr *readReplicas, conns []*sqlx.DB) bool {
 	t.Helper()
 
