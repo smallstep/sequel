@@ -42,19 +42,24 @@ func withSchemaSQL() testcontainers.CustomizeRequestOption {
 func TestMain(m *testing.M) {
 	ctx := context.Background()
 	cleanups, err := createPostgresContainers(ctx)
-	defer func() {
+	if err != nil {
+		fmt.Printf("did not create postgres containers: %v\n", err)
 		for _, cleanup := range cleanups {
 			if cleanup != nil {
 				cleanup()
 			}
 		}
-	}()
-	if err != nil {
-		fmt.Printf("did not create postgres containers: %v\n", err)
+		os.Exit(1)
 	}
 
 	// nolint:gocritic // The docs for Run specify that the returned int is to be passed to os.Exit
-	os.Exit(m.Run())
+	retCode := m.Run()
+	for _, cleanup := range cleanups {
+		if cleanup != nil {
+			cleanup()
+		}
+	}
+	os.Exit(retCode)
 }
 
 // createPostgresContainers creates 3 databases as containers. The first is intended to mimic a master database and
