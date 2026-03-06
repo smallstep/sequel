@@ -143,7 +143,7 @@ func FromContext(ctx context.Context) (db *DB, ok bool) {
 
 // Context returns the default database context with a 15s timeout.
 func Context(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(ctx, 15*time.Second)
+	return context.WithTimeout(ctx, 15*time.Second) // #nosec G118 -- // calling cancel is responsibility of the caller
 }
 
 // IsErrNotFound returns true if the given error is equal to sql.ErrNoRows
