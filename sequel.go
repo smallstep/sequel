@@ -153,7 +153,7 @@ func NewDB(db *sql.DB, driverName string, opts ...Option) (*DB, error) {
 // It also connects and pings the DB to ensure connectivity.
 func createReadReplicaSet(driverName string, dsns []string, maxConns int) (*ReadReplicaSet, error) {
 	if len(dsns) == 0 {
-		return nil, nil
+		return nil, nil //nolint:nilnil // if there are no dsns, then this should not create anything
 	}
 
 	var rss ReadReplicaSet
