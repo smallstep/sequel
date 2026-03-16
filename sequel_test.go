@@ -160,14 +160,12 @@ func TestNewDB(t *testing.T) {
 	}{
 		{"ok", args{db, "pgx/v5", nil}, &DB{
 			db:            sqlx.NewDb(db, "pgx/v5"),
-			dbRRs:         &readReplicas{},
 			clock:         clock.New(),
 			doRebindModel: false,
 			driverName:    "pgx/v5",
 		}, assert.NoError},
 		{"ok with options", args{db, "pgx/v5", []Option{WithClock(clock.NewMock(testTime)), WithDriver("pgx"), WithRebindModel()}}, &DB{
 			db:            sqlx.NewDb(db, "pgx"),
-			dbRRs:         &readReplicas{},
 			clock:         clock.NewMock(testTime),
 			doRebindModel: true,
 			driverName:    "pgx",
@@ -250,19 +248,11 @@ func TestDBQueries(t *testing.T) {
 	})
 
 	// Create DB source with two read replicas
-	dbWithRRs, err := New(postgresDataSource)
+	dbWithRRs, err := New(postgresDataSource, WithReadReplica(postgresDataSourceRR1), WithReadReplica(postgresDataSourceRR2))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		assert.NoError(t, dbWithRRs.Close())
 	})
-
-	rr1, err := sqlx.Open("pgx/v5", postgresDataSourceRR1)
-	assert.NoError(t, err)
-	dbWithRRs.WithReadReplica(rr1)
-
-	rr2, err := sqlx.Open("pgx/v5", postgresDataSourceRR2)
-	assert.NoError(t, err)
-	dbWithRRs.WithReadReplica(rr2)
 
 	p1 := &personModel{
 		Name:  "Lucky Luke",
@@ -343,13 +333,13 @@ func TestDBQueries(t *testing.T) {
 
 	t.Run("query RR (no RRs)", func(t *testing.T) {
 		//nolint:rowserrcheck // rows is expected to be nil, err to be non-nil
-		rows, err := db.QueryRR(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
-		assert.Error(t, err, ErrNoReadReplicaConnection)
+		rows, err := db.ReadReplicaSet().Query(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
+		assert.Error(t, err, ErrNoReadReplicaConnections)
 		assert.Nil(t, rows)
 	})
 
 	t.Run("query RR", func(t *testing.T) {
-		rows, err := dbWithRRs.QueryRR(ctx, "SELECT * FROM person_test WHERE email = $1", "read1@replica.com")
+		rows, err := dbWithRRs.ReadReplicaSet().Query(ctx, "SELECT * FROM person_test WHERE email = $1", "read1@replica.com")
 		if err != nil {
 			t.Fatalf("expecting no error, got %v", err)
 		}
@@ -372,7 +362,7 @@ func TestDBQueries(t *testing.T) {
 
 	t.Run("queryRow RR", func(t *testing.T) {
 		var p personModel
-		row, err := dbWithRRs.QueryRowRR(ctx, "SELECT * FROM person_test WHERE email = $1", "read2@replica.com")
+		row, err := dbWithRRs.ReadReplicaSet().QueryRow(ctx, "SELECT * FROM person_test WHERE email = $1", "read2@replica.com")
 		assert.NoError(t, err)
 		assert.NoError(t, row.Err())
 		assert.NoError(t, row.Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt, &p.DeletedAt, &p.Name, &p.Email))
@@ -435,7 +425,7 @@ func TestDBQueries(t *testing.T) {
 
 	t.Run("get RR", func(t *testing.T) {
 		var p personModel
-		assert.NoError(t, dbWithRRs.GetRR(ctx, &p, "SELECT * FROM person_test WHERE email = $1", "read3@replica.com"))
+		assert.NoError(t, dbWithRRs.ReadReplicaSet().Get(ctx, &p, "SELECT * FROM person_test WHERE email = $1", "read3@replica.com"))
 		assert.Equal(t, p.Email.String, "read3@replica.com")
 	})
 
@@ -449,7 +439,7 @@ func TestDBQueries(t *testing.T) {
 
 	t.Run("getAll RR", func(t *testing.T) {
 		var ap []*personModel
-		assert.NoError(t, dbWithRRs.GetAllRR(ctx, &ap, "SELECT * FROM person_test"))
+		assert.NoError(t, dbWithRRs.ReadReplicaSet().GetAll(ctx, &ap, "SELECT * FROM person_test"))
 		assert.Equal(t, len(ap), 3)
 		assert.Equal(t, ap[0].Email.String, "read1@replica.com")
 		assert.Equal(t, ap[1].Email.String, "read2@replica.com")

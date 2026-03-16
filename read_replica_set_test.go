@@ -24,8 +24,8 @@ func Test_readReplicas_add(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create readReplicas
-			rr := &readReplicas{}
+			// Create ReadReplicaSet
+			rr := &ReadReplicaSet{}
 
 			// Add connections to read replicas
 			for _, c := range tt.rrs {
@@ -34,15 +34,15 @@ func Test_readReplicas_add(t *testing.T) {
 
 			// Confirm they are all added
 			if !rrContains(t, rr, tt.rrs) {
-				t.Fatal("readReplicas does not contain all added conns")
+				t.Fatal("ReadReplicaSet does not contain all added conns")
 			}
 		})
 	}
 }
 
 func Test_readReplicas_next(t *testing.T) {
-	newRRs := func(rrs ...*sqlx.DB) *readReplicas {
-		rr := &readReplicas{}
+	newRRs := func(rrs ...*sqlx.DB) *ReadReplicaSet {
+		rr := &ReadReplicaSet{}
 		for _, c := range rrs {
 			rr.add(c)
 		}
@@ -58,15 +58,15 @@ func Test_readReplicas_next(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		rr      *readReplicas
+		rr      *ReadReplicaSet
 		want    *sqlx.DB
 		wantErr error
 	}{
 		{
-			name:    "empty readReplicas",
+			name:    "empty ReadReplicaSet",
 			rr:      emptyRR,
 			want:    nil,
-			wantErr: ErrNoReadReplicaConnection,
+			wantErr: ErrNoReadReplicaConnections,
 		},
 		{
 			name:    "one read replica",
@@ -125,8 +125,8 @@ func Test_readReplicas_next(t *testing.T) {
 	}
 }
 
-// rrContains is a test helper to see if a [readReplicas] contains all the connections passed in
-func rrContains(t *testing.T, rr *readReplicas, conns []*sqlx.DB) bool {
+// rrContains is a test helper to see if a [ReadReplicaSet] contains all the connections passed in
+func rrContains(t *testing.T, rr *ReadReplicaSet, conns []*sqlx.DB) bool {
 	t.Helper()
 
 	var findCnt int

@@ -24,7 +24,7 @@ const MaxOpenConnections = 100
 // operations on a Model.
 type DB struct {
 	db            *sqlx.DB
-	dbRRs         *readReplicas
+	rrs           *ReadReplicaSet
 	clock         clock.Clock
 	doRebindModel bool
 	driverName    string
@@ -35,6 +35,7 @@ type options struct {
 	DriverName         string
 	RebindModel        bool
 	MaxOpenConnections int
+	ReadReplicaDSNs    []string
 }
 
 func newOptions(driverName string) *options {
@@ -89,6 +90,13 @@ func WithMaxOpenConnections(n int) Option {
 	}
 }
 
+// WithReadReplica adds a read replica DSN to the list of read replicas.
+func WithReadReplica(dsn string) Option {
+	return func(o *options) {
+		o.ReadReplicaDSNs = append(o.ReadReplicaDSNs, dsn)
+	}
+}
+
 // New creates a new DB. It will fail if it cannot ping it.
 func New(dataSourceName string, opts ...Option) (*DB, error) {
 	options := newOptions("pgx/v5").apply(opts)
@@ -100,9 +108,14 @@ func New(dataSourceName string, opts ...Option) (*DB, error) {
 	}
 	db.SetMaxOpenConns(options.MaxOpenConnections)
 
+	rrs, err := createReadReplicaSet(options.DriverName, options.ReadReplicaDSNs, options.MaxOpenConnections)
+	if err != nil {
+		return nil, fmt.Errorf("error creating read replica set: %w", err)
+	}
+
 	return &DB{
 		db:            db,
-		dbRRs:         &readReplicas{},
+		rrs:           rrs,
 		clock:         options.Clock,
 		doRebindModel: options.RebindModel,
 		driverName:    options.DriverName,
@@ -122,13 +135,43 @@ func NewDB(db *sql.DB, driverName string, opts ...Option) (*DB, error) {
 	}
 	dbx.SetMaxOpenConns(options.MaxOpenConnections)
 
+	rrs, err := createReadReplicaSet(options.DriverName, options.ReadReplicaDSNs, options.MaxOpenConnections)
+	if err != nil {
+		return nil, fmt.Errorf("error creating read replica set: %w", err)
+	}
+
 	return &DB{
 		db:            dbx,
-		dbRRs:         &readReplicas{},
+		rrs:           rrs,
 		clock:         options.Clock,
 		doRebindModel: options.RebindModel,
 		driverName:    options.DriverName,
 	}, nil
+}
+
+// createReadReplicaSet creates a new ReadReplicaSet from the given list of DSN strings.
+// It also connects and pings the DB to ensure connectivity.
+func createReadReplicaSet(driverName string, dsns []string, maxConns int) (*ReadReplicaSet, error) {
+	if len(dsns) == 0 {
+		return nil, nil
+	}
+
+	var rss ReadReplicaSet
+	for _, dsn := range dsns {
+		// Connect to DB and ping
+		rr, err := sqlx.Connect(driverName, dsn)
+		if err != nil {
+			return nil, fmt.Errorf("error connecting to the read replica database: %w", err)
+		}
+
+		// Set max open connections
+		rr.SetMaxOpenConns(maxConns)
+
+		// Add read replica to ReadReplicaSet
+		rss.add(rr)
+	}
+
+	return &rss, nil
 }
 
 type dbKey struct{}
@@ -180,17 +223,10 @@ func RowsAffected(res sql.Result, n int64) error {
 	return fmt.Errorf("unexpected number of rows: got %d, want %d", got, n)
 }
 
-// WithReadReplica adds a read replica connection to the [DB].
-func (d *DB) WithReadReplica(conn *sqlx.DB) {
-	if conn != nil {
-		d.dbRRs.add(conn)
-	}
-}
-
 // Close closes the database and prevents new queries from starting. Close then
 // waits for all queries that have started processing on the server to finish.
 func (d *DB) Close() error {
-	d.dbRRs.Close()
+	d.rrs.Close()
 	return d.db.Close()
 }
 
@@ -202,6 +238,11 @@ func (d *DB) Driver() string {
 // DB returns the embedded *sql.DB.
 func (d *DB) DB() *sql.DB {
 	return d.db.DB
+}
+
+// ReadReplicaSet returns the read replica set.
+func (d *DB) ReadReplicaSet() *ReadReplicaSet {
+	return d.rrs
 }
 
 // Rebind transforms a query from `?` to the DB driver's bind type.
@@ -222,17 +263,6 @@ func (d *DB) Query(ctx context.Context, query string, args ...any) (*sql.Rows, e
 	return d.db.QueryContext(ctx, query, args...)
 }
 
-// QueryRR executes a query against a read replica. Queries that are not SELECTs may not work.
-// The args are for any placeholder parameters in the query.
-func (d *DB) QueryRR(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
-	db, err := d.dbRRs.next()
-	if err != nil {
-		return nil, fmt.Errorf("did not get read replica connection: %w", err)
-	}
-
-	return db.QueryContext(ctx, query, args...)
-}
-
 // QueryRow executes a query that is expected to return at most one row.
 // QueryRowContext always returns a non-nil value. Errors are deferred until
 // Row's Scan method is called.
@@ -242,22 +272,6 @@ func (d *DB) QueryRR(ctx context.Context, query string, args ...any) (*sql.Rows,
 // rest.
 func (d *DB) QueryRow(ctx context.Context, query string, args ...any) *sql.Row {
 	return d.db.QueryRowContext(ctx, query, args...)
-}
-
-// QueryRowRR executes a query that is expected to return at most one row against a read replica.
-// QueryRowContext always returns a non-nil value. Errors are deferred until
-// Row's Scan method is called.
-//
-// If the query selects no rows, the *Row's Scan will return ErrNoRows.
-// Otherwise, the *Row's Scan scans the first selected row and discards the
-// rest.
-func (d *DB) QueryRowRR(ctx context.Context, query string, args ...any) (*sql.Row, error) {
-	db, err := d.dbRRs.next()
-	if err != nil {
-		return nil, fmt.Errorf("did not get read replica connection: %w", err)
-	}
-
-	return db.QueryRowContext(ctx, query, args...), nil
 }
 
 // Exec executes a query without returning any rows. The args are for any
@@ -309,43 +323,11 @@ func (d *DB) Get(ctx context.Context, dest Model, query string, args ...any) err
 	return d.db.GetContext(ctx, dest, query, args...)
 }
 
-// GetRR populates the given model for the result of the given select query against a read replica.
-func (d *DB) GetRR(ctx context.Context, dest Model, query string, args ...any) error {
-	db, err := d.dbRRs.next()
-	if err != nil {
-		return fmt.Errorf("did not get read replica connection: %w", err)
-	}
-
-	return db.GetContext(ctx, dest, query, args...)
-}
-
 // GetAll populates the given destination with all the results of the given
 // select query. The method will fail if the destination is not a pointer to a
 // slice.
 func (d *DB) GetAll(ctx context.Context, dest any, query string, args ...any) error {
 	rows, err := d.db.QueryContext(ctx, query, args...)
-	if err != nil {
-		return err
-	}
-
-	defer rows.Close()
-
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	return sqlx.StructScan(rows, dest)
-}
-
-// GetAllRR populates the given destination with all the results of the given
-// select query (from a read replica). The method will fail if the destination is not a pointer to a
-// slice.
-func (d *DB) GetAllRR(ctx context.Context, dest any, query string, args ...any) error {
-	db, err := d.dbRRs.next()
-	if err != nil {
-		return fmt.Errorf("did not get read replica connection: %w", err)
-	}
-
-	rows, err := db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
