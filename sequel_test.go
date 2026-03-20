@@ -334,7 +334,7 @@ func TestDBQueries(t *testing.T) {
 	t.Run("query RR (no RRs)", func(t *testing.T) {
 		//nolint:rowserrcheck // rows is expected to be nil, err to be non-nil
 		rows, err := db.ReadReplicaSet().Query(ctx, "SELECT * FROM person_test WHERE id = $1", p1.GetID())
-		assert.Error(t, err, ErrNoReadReplicaConnections)
+		assert.ErrorIs(t, err, ErrNoReadReplicaConnections)
 		assert.Nil(t, rows)
 	})
 
