@@ -19,7 +19,7 @@ type readReplica struct {
 }
 
 // ReadReplicaSet contains a set of DB connections. It is intended to give fair round robin access
-// through a circular singularly linked list.
+// through a circular singly linked list.
 //
 // Replicas are appended after the current one. The intended use is to build the replica set before
 // querying, but all operations are concurrent-safe.
