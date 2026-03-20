@@ -110,6 +110,11 @@ func New(dataSourceName string, opts ...Option) (*DB, error) {
 
 	rrs, err := createReadReplicaSet(options.DriverName, options.ReadReplicaDSNs, options.MaxOpenConnections)
 	if err != nil {
+		// Close any open db connections
+		_ = db.Close()
+		if rrs != nil {
+			rrs.Close()
+		}
 		return nil, fmt.Errorf("error creating read replica set: %w", err)
 	}
 
@@ -137,6 +142,11 @@ func NewDB(db *sql.DB, driverName string, opts ...Option) (*DB, error) {
 
 	rrs, err := createReadReplicaSet(options.DriverName, options.ReadReplicaDSNs, options.MaxOpenConnections)
 	if err != nil {
+		// Close any open db connections
+		_ = db.Close()
+		if rrs != nil {
+			rrs.Close()
+		}
 		return nil, fmt.Errorf("error creating read replica set: %w", err)
 	}
 
@@ -156,22 +166,22 @@ func createReadReplicaSet(driverName string, dsns []string, maxConns int) (*Read
 		return nil, nil //nolint:nilnil // if there are no dsns, then this should not create anything
 	}
 
-	var rss ReadReplicaSet
+	var rrs ReadReplicaSet
 	for _, dsn := range dsns {
 		// Connect to DB and ping
 		rr, err := sqlx.Connect(driverName, dsn)
 		if err != nil {
-			return nil, fmt.Errorf("error connecting to the read replica database: %w", err)
+			return &rrs, fmt.Errorf("error connecting to the read replica database: %w", err)
 		}
 
 		// Set max open connections
 		rr.SetMaxOpenConns(maxConns)
 
 		// Add read replica to ReadReplicaSet
-		rss.add(rr)
+		rrs.add(rr)
 	}
 
-	return &rss, nil
+	return &rrs, nil
 }
 
 type dbKey struct{}

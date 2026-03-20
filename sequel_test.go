@@ -439,7 +439,7 @@ func TestDBQueries(t *testing.T) {
 
 	t.Run("getAll RR", func(t *testing.T) {
 		var ap []*personModel
-		assert.NoError(t, dbWithRRs.ReadReplicaSet().GetAll(ctx, &ap, "SELECT * FROM person_test"))
+		assert.NoError(t, dbWithRRs.ReadReplicaSet().GetAll(ctx, &ap, "SELECT * FROM person_test ORDER BY email"))
 		assert.Equal(t, len(ap), 3)
 		assert.Equal(t, ap[0].Email.String, "read1@replica.com")
 		assert.Equal(t, ap[1].Email.String, "read2@replica.com")
