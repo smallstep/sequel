@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -19,22 +20,23 @@ const BatchSize = 100
 // Batch inserts a slice of items into the given table using multi-row INSERT
 // statements. Items are inserted in chunks of [BatchSize]. The columns
 // parameter specifies the column names, and the values function maps each item to
-// its column values. The length of the slice returned by values must match the
+// its column values. The length of the slice returned by extractValues must match the
 // length of columns. Batch does nothing if items is empty. Table, columns and onConfict
-// are not sanitized; they must come from a trusted source. The values function will
+// are not sanitized; they must come from a trusted source. The extractValues function will
 // never be called concurrently.
-func Batch[T any](ctx context.Context, exec Executor, table string, columns []string, onConflict string, items []T, values func(T) []any) error {
-	for i := 0; i < len(items); i += BatchSize {
-		end := min(i+BatchSize, len(items))
-		query, args := batchQuery(table, columns, onConflict, items[i:end], values)
+func Batch[T any](ctx context.Context, exec Executor, table string, columns []string, onConflict string, items []T, extractValues func(T) []any) error {
+	batch := 0
+	for chunk := range slices.Chunk(items, BatchSize) {
+		query, args := batchQuery(table, columns, onConflict, chunk, extractValues)
 		if _, err := exec.ExecContext(ctx, query, args...); err != nil {
-			return err
+			return fmt.Errorf("batch %d (%d items) failed: %w", batch, len(chunk), err)
 		}
+		batch++
 	}
 	return nil
 }
 
-func batchQuery[T any](table string, columns []string, onConflict string, items []T, values func(T) []any) (string, []any) {
+func batchQuery[T any](table string, columns []string, onConflict string, items []T, extractValues func(T) []any) (string, []any) {
 	ncols := len(columns)
 	args := make([]any, 0, len(items)*ncols)
 
@@ -46,7 +48,7 @@ func batchQuery[T any](table string, columns []string, onConflict string, items 
 			b.WriteString(", ")
 		}
 		b.WriteByte('(')
-		vals := values(item)
+		vals := extractValues(item)
 		for j, v := range vals {
 			if j > 0 {
 				b.WriteString(", ")
