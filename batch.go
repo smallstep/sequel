@@ -20,15 +20,13 @@ const BatchSize = 100
 // statements. Items are inserted in chunks of [BatchSize]. The columns
 // parameter specifies the column names, and the values function maps each item to
 // its column values. The length of the slice returned by values must match the
-// length of columns.
-//
-// Batch does nothing if items is empty.
-//
-// Table and columns are not sanitized; they must come from a trusted source.
-func Batch[T any](ctx context.Context, exec Executor, table string, columns []string, items []T, values func(T) []any) error {
+// length of columns. Batch does nothing if items is empty. Table, columns and onConfict
+// are not sanitized; they must come from a trusted source. The values function will
+// never be called concurrently.
+func Batch[T any](ctx context.Context, exec Executor, table string, columns []string, onConflict string, items []T, values func(T) []any) error {
 	for i := 0; i < len(items); i += BatchSize {
 		end := min(i+BatchSize, len(items))
-		query, args := batchQuery(table, columns, items[i:end], values)
+		query, args := batchQuery(table, columns, onConflict, items[i:end], values)
 		if _, err := exec.ExecContext(ctx, query, args...); err != nil {
 			return err
 		}
@@ -36,7 +34,7 @@ func Batch[T any](ctx context.Context, exec Executor, table string, columns []st
 	return nil
 }
 
-func batchQuery[T any](table string, columns []string, items []T, values func(T) []any) (string, []any) {
+func batchQuery[T any](table string, columns []string, onConflict string, items []T, values func(T) []any) (string, []any) {
 	ncols := len(columns)
 	args := make([]any, 0, len(items)*ncols)
 
@@ -58,6 +56,8 @@ func batchQuery[T any](table string, columns []string, items []T, values func(T)
 		}
 		b.WriteByte(')')
 	}
+
+	fmt.Fprintf(&b, " %s", onConflict)
 
 	return b.String(), args
 }

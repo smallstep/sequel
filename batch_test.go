@@ -32,7 +32,7 @@ func TestBatch(t *testing.T) {
 	}
 
 	t.Run("empty", func(t *testing.T) {
-		err := Batch(ctx, nil, "person_test", columns, []person{}, fn)
+		err := Batch(ctx, nil, "person_test", columns, "", []person{}, fn)
 		assert.NoError(t, err)
 	})
 
@@ -40,7 +40,7 @@ func TestBatch(t *testing.T) {
 		items := []person{
 			{Name: "batch-single", Email: "batch-single@example.com"},
 		}
-		require.NoError(t, Batch(ctx, db, "person_test", columns, items, fn))
+		require.NoError(t, Batch(ctx, db, "person_test", columns, "", items, fn))
 
 		var name string
 		err := db.QueryRow(ctx, "SELECT name FROM person_test WHERE email = $1", "batch-single@example.com").Scan(&name)
@@ -54,7 +54,7 @@ func TestBatch(t *testing.T) {
 			{Name: "batch-multi-2", Email: "batch-multi-2@example.com"},
 			{Name: "batch-multi-3", Email: "batch-multi-3@example.com"},
 		}
-		require.NoError(t, Batch(ctx, db, "person_test", columns, items, fn))
+		require.NoError(t, Batch(ctx, db, "person_test", columns, "", items, fn))
 
 		for _, p := range items {
 			var name string
@@ -73,7 +73,7 @@ func TestBatch(t *testing.T) {
 				Email: fmt.Sprintf("batch-chunk-%d@example.com", i),
 			}
 		}
-		require.NoError(t, Batch(ctx, db, "person_test", columns, items, fn))
+		require.NoError(t, Batch(ctx, db, "person_test", columns, "", items, fn))
 
 		var count int
 		err := db.QueryRow(ctx, "SELECT COUNT(*) FROM person_test WHERE name LIKE 'batch-chunk-%'").Scan(&count)
@@ -89,12 +89,48 @@ func TestBatch(t *testing.T) {
 			{Name: "batch-tx-1", Email: "batch-tx-1@example.com"},
 			{Name: "batch-tx-2", Email: "batch-tx-2@example.com"},
 		}
-		require.NoError(t, Batch(ctx, tx, "person_test", columns, items, fn))
+		require.NoError(t, Batch(ctx, tx, "person_test", columns, "", items, fn))
 		require.NoError(t, tx.Commit())
 
 		var count int
 		err = db.QueryRow(ctx, "SELECT COUNT(*) FROM person_test WHERE name LIKE 'batch-tx-%'").Scan(&count)
 		require.NoError(t, err)
 		assert.Equal(t, 2, count)
+	})
+
+	t.Run("onConflictDoNothing", func(t *testing.T) {
+		items := []person{
+			{Name: "batch-conflict-1", Email: "batch-conflict-1@example.com"},
+		}
+		require.NoError(t, Batch(ctx, db, "person_test", columns, "", items, fn))
+
+		// Insert again with a different name but same email; conflict should be ignored.
+		dupes := []person{
+			{Name: "batch-conflict-1-updated", Email: "batch-conflict-1@example.com"},
+		}
+		require.NoError(t, Batch(ctx, db, "person_test", columns, "ON CONFLICT (email) DO NOTHING", dupes, fn))
+
+		var name string
+		err := db.QueryRow(ctx, "SELECT name FROM person_test WHERE email = $1", "batch-conflict-1@example.com").Scan(&name)
+		require.NoError(t, err)
+		assert.Equal(t, "batch-conflict-1", name)
+	})
+
+	t.Run("onConflictDoUpdate", func(t *testing.T) {
+		items := []person{
+			{Name: "batch-upsert-1", Email: "batch-upsert-1@example.com"},
+		}
+		require.NoError(t, Batch(ctx, db, "person_test", columns, "", items, fn))
+
+		// Insert again with a different name but same email; name should be updated.
+		upserts := []person{
+			{Name: "batch-upsert-1-updated", Email: "batch-upsert-1@example.com"},
+		}
+		require.NoError(t, Batch(ctx, db, "person_test", columns, "ON CONFLICT (email) DO UPDATE SET name = EXCLUDED.name", upserts, fn))
+
+		var name string
+		err := db.QueryRow(ctx, "SELECT name FROM person_test WHERE email = $1", "batch-upsert-1@example.com").Scan(&name)
+		require.NoError(t, err)
+		assert.Equal(t, "batch-upsert-1-updated", name)
 	})
 }
