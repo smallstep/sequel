@@ -290,6 +290,12 @@ func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 	return d.db.ExecContext(ctx, query, args...)
 }
 
+// ExecContext is an alias for [DB.Exec] that satisfies the [Executor]
+// interface.
+func (d *DB) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	return d.db.ExecContext(ctx, query, args...)
+}
+
 // RebindQuery executes a query that returns rows, typically a SELECT. The query is
 // rebound from `?` to the DB driver's bind type. The args are for any
 // placeholder parameters in the query.
