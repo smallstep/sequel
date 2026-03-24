@@ -20,7 +20,13 @@ const (
 	postgresImage = "docker.io/postgres:16.0-alpine"
 )
 
-var postgresDataSource string
+// Connection strings for the three databases created in [TestMain]
+// These are used in other tests
+var (
+	postgresDataSource    string
+	postgresDataSourceRR1 string
+	postgresDataSourceRR2 string
+)
 
 func withSchemaSQL() testcontainers.CustomizeRequestOption {
 	return func(req *testcontainers.GenericContainerRequest) error {
@@ -34,24 +40,74 @@ func withSchemaSQL() testcontainers.CustomizeRequestOption {
 }
 
 func TestMain(m *testing.M) {
-	var cleanups []func()
-	cleanup := func(fn func()) {
-		cleanups = append(cleanups, fn)
-	}
-	fatal := func(args ...any) {
-		fmt.Fprintln(os.Stderr, args...)
-		for _, fn := range cleanups {
-			fn()
+	ctx := context.Background()
+	cleanups, err := createPostgresContainers(ctx)
+	if err != nil {
+		fmt.Printf("did not create postgres containers: %v\n", err)
+		for _, cleanup := range cleanups {
+			if cleanup != nil {
+				cleanup()
+			}
 		}
 		os.Exit(1)
 	}
 
-	ctx := context.Background()
+	// nolint:gocritic // The docs for Run specify that the returned int is to be passed to os.Exit
+	retCode := m.Run()
+	for _, cleanup := range cleanups {
+		if cleanup != nil {
+			cleanup()
+		}
+	}
+	os.Exit(retCode)
+}
+
+// createPostgresContainers creates 3 databases as containers. The first is intended to mimic a master database and
+// the last 2 are intended to mimic read replicas.
+// A []func() is returned to cleanups.
+// Package-level connection strings are set.
+func createPostgresContainers(ctx context.Context) ([]func(), error) {
+	// Database connection strings are the same, except the port
+	connString := func(port string) string {
+		return fmt.Sprintf("postgres://%s:%s@localhost:%s/%s?sslmode=disable&application_name=test", dbUser, dbPassword, port, dbName)
+	}
+
+	var cleanups []func()
+
+	// Create the master database
+	cM, mpM, err := createPostgresContainer(ctx, "init-db.sh")
+	cleanups = append(cleanups, cM)
+	if err != nil {
+		return cleanups, err
+	}
+	postgresDataSource = connString(mpM)
+
+	// Create first read replica
+	cRR1, mpRR1, err := createPostgresContainer(ctx, "init-db-rr.sh")
+	cleanups = append(cleanups, cRR1)
+	if err != nil {
+		return cleanups, err
+	}
+	postgresDataSourceRR1 = connString(mpRR1)
+
+	// Create second read replica
+	cRR2, mpRR2, err := createPostgresContainer(ctx, "init-db-rr.sh")
+	cleanups = append(cleanups, cRR2)
+	if err != nil {
+		return cleanups, err
+	}
+	postgresDataSourceRR2 = connString(mpRR2)
+
+	return cleanups, nil
+}
+
+// createPostgresContainer creates a single postgres container on the specified port
+func createPostgresContainer(ctx context.Context, initFilename string) (func(), string, error) {
 	postgresContainer, err := postgres.Run(ctx, postgresImage,
 		postgres.WithDatabase(dbName),
 		postgres.WithUsername(dbUser),
 		postgres.WithPassword(dbPassword),
-		postgres.WithInitScripts(filepath.Join("testdata", "init-db.sh")),
+		postgres.WithInitScripts(filepath.Join("testdata", initFilename)),
 		withSchemaSQL(),
 		testcontainers.WithWaitStrategy(
 			wait.ForLog("database system is ready to accept connections").
@@ -60,28 +116,27 @@ func TestMain(m *testing.M) {
 		),
 	)
 	if err != nil {
-		fatal("error creating postgres container:", err)
+		return nil, "", fmt.Errorf("error creating postgres container: %w", err)
 	}
-	cleanup(func() {
+
+	cleanup := func() {
 		if err := postgresContainer.Terminate(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, "error terminating postgres:", err)
 		}
-	})
+	}
 
 	postgresState, err := postgresContainer.State(ctx)
 	if err != nil {
-		fatal(err)
+		return cleanup, "", fmt.Errorf("checking container state: %w", err)
 	}
 	if !postgresState.Running {
-		fatal("Postgres status:", postgresState.Status)
+		return cleanup, "", fmt.Errorf("Postgres status %q is not \"running\"", postgresState.Status)
 	}
 
-	postgresPort, err := postgresContainer.MappedPort(ctx, "5432/tcp")
+	mp, err := postgresContainer.MappedPort(ctx, "5432/tcp")
 	if err != nil {
-		fatal(err)
+		return cleanup, "", fmt.Errorf("mapped port 5432/tcp does not seem to be available: %w", err)
 	}
 
-	postgresDataSource = fmt.Sprintf("postgres://%s:%s@localhost:%s/%s?sslmode=disable&application_name=test", dbUser, dbPassword, postgresPort.Port(), dbName)
-
-	os.Exit(m.Run())
+	return cleanup, mp.Port(), nil
 }

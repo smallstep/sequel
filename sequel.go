@@ -24,6 +24,7 @@ const MaxOpenConnections = 100
 // operations on a Model.
 type DB struct {
 	db            *sqlx.DB
+	rrs           *ReadReplicaSet
 	clock         clock.Clock
 	doRebindModel bool
 	driverName    string
@@ -34,6 +35,7 @@ type options struct {
 	DriverName         string
 	RebindModel        bool
 	MaxOpenConnections int
+	ReadReplicaDSNs    []string
 }
 
 func newOptions(driverName string) *options {
@@ -88,6 +90,13 @@ func WithMaxOpenConnections(n int) Option {
 	}
 }
 
+// WithReadReplica adds a read replica DSN to the list of read replicas.
+func WithReadReplica(dsn string) Option {
+	return func(o *options) {
+		o.ReadReplicaDSNs = append(o.ReadReplicaDSNs, dsn)
+	}
+}
+
 // New creates a new DB. It will fail if it cannot ping it.
 func New(dataSourceName string, opts ...Option) (*DB, error) {
 	options := newOptions("pgx/v5").apply(opts)
@@ -99,8 +108,19 @@ func New(dataSourceName string, opts ...Option) (*DB, error) {
 	}
 	db.SetMaxOpenConns(options.MaxOpenConnections)
 
+	rrs, err := createReadReplicaSet(options.DriverName, options.ReadReplicaDSNs, options.MaxOpenConnections)
+	if err != nil {
+		// Close any open db connections
+		_ = db.Close()
+		if rrs != nil {
+			rrs.Close()
+		}
+		return nil, fmt.Errorf("error creating read replica set: %w", err)
+	}
+
 	return &DB{
 		db:            db,
+		rrs:           rrs,
 		clock:         options.Clock,
 		doRebindModel: options.RebindModel,
 		driverName:    options.DriverName,
@@ -120,12 +140,48 @@ func NewDB(db *sql.DB, driverName string, opts ...Option) (*DB, error) {
 	}
 	dbx.SetMaxOpenConns(options.MaxOpenConnections)
 
+	rrs, err := createReadReplicaSet(options.DriverName, options.ReadReplicaDSNs, options.MaxOpenConnections)
+	if err != nil {
+		// Close any open db connections
+		_ = db.Close()
+		if rrs != nil {
+			rrs.Close()
+		}
+		return nil, fmt.Errorf("error creating read replica set: %w", err)
+	}
+
 	return &DB{
 		db:            dbx,
+		rrs:           rrs,
 		clock:         options.Clock,
 		doRebindModel: options.RebindModel,
 		driverName:    options.DriverName,
 	}, nil
+}
+
+// createReadReplicaSet creates a new ReadReplicaSet from the given list of DSN strings.
+// It also connects and pings the DB to ensure connectivity.
+func createReadReplicaSet(driverName string, dsns []string, maxConns int) (*ReadReplicaSet, error) {
+	if len(dsns) == 0 {
+		return nil, nil //nolint:nilnil // if there are no dsns, then this should not create anything
+	}
+
+	var rrs ReadReplicaSet
+	for _, dsn := range dsns {
+		// Connect to DB and ping
+		rr, err := sqlx.Connect(driverName, dsn)
+		if err != nil {
+			return &rrs, fmt.Errorf("error connecting to the read replica database: %w", err)
+		}
+
+		// Set max open connections
+		rr.SetMaxOpenConns(maxConns)
+
+		// Add read replica to ReadReplicaSet
+		rrs.add(rr)
+	}
+
+	return &rrs, nil
 }
 
 type dbKey struct{}
@@ -180,6 +236,7 @@ func RowsAffected(res sql.Result, n int64) error {
 // Close closes the database and prevents new queries from starting. Close then
 // waits for all queries that have started processing on the server to finish.
 func (d *DB) Close() error {
+	d.rrs.Close()
 	return d.db.Close()
 }
 
@@ -191,6 +248,11 @@ func (d *DB) Driver() string {
 // DB returns the embedded *sql.DB.
 func (d *DB) DB() *sql.DB {
 	return d.db.DB
+}
+
+// ReadReplicaSet returns the read replica set.
+func (d *DB) ReadReplicaSet() *ReadReplicaSet {
+	return d.rrs
 }
 
 // Rebind transforms a query from `?` to the DB driver's bind type.
@@ -228,14 +290,14 @@ func (d *DB) Exec(ctx context.Context, query string, args ...any) (sql.Result, e
 	return d.db.ExecContext(ctx, query, args...)
 }
 
-// Query executes a query that returns rows, typically a SELECT. The query is
+// RebindQuery executes a query that returns rows, typically a SELECT. The query is
 // rebound from `?` to the DB driver's bind type. The args are for any
 // placeholder parameters in the query.
 func (d *DB) RebindQuery(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return d.db.QueryContext(ctx, d.db.Rebind(query), args...)
 }
 
-// QueryRow executes a query that is expected to return at most one row. The
+// RebindQueryRow executes a query that is expected to return at most one row. The
 // query is rebound from `?` to the DB driver's bind type. QueryRowContext
 // always returns a non-nil value. Errors are deferred until Row's Scan method
 // is called.
@@ -247,7 +309,7 @@ func (d *DB) RebindQueryRow(ctx context.Context, query string, args ...any) *sql
 	return d.db.QueryRowContext(ctx, d.db.Rebind(query), args...)
 }
 
-// Exec executes a query without returning any rows. The query is rebound from
+// RebindExec executes a query without returning any rows. The query is rebound from
 // `?` to the DB driver's bind type. The args are for any placeholder parameters
 // in the query.
 func (d *DB) RebindExec(ctx context.Context, query string, args ...any) (sql.Result, error) {
@@ -279,6 +341,9 @@ func (d *DB) GetAll(ctx context.Context, dest any, query string, args ...any) er
 	if err != nil {
 		return err
 	}
+
+	defer rows.Close()
+
 	if err := rows.Err(); err != nil {
 		return err
 	}
@@ -500,14 +565,14 @@ func (t *Tx) ExecContext(ctx context.Context, query string, args ...any) (sql.Re
 	return t.tx.ExecContext(ctx, query, args...)
 }
 
-// Query executes a query that returns rows, typically a SELECT. The query is
+// RebindQuery executes a query that returns rows, typically a SELECT. The query is
 // rebound from `?` to the DB driver's bind type. The args are for any
 // placeholder parameters in the query.
 func (t *Tx) RebindQuery(query string, args ...any) (*sql.Rows, error) {
 	return t.tx.Query(t.tx.Rebind(query), args...)
 }
 
-// QueryRow executes a query that is expected to return at most one row. The
+// RebindQueryRow executes a query that is expected to return at most one row. The
 // query is rebound from `?` to the DB driver's bind type. QueryRowContext
 // always returns a non-nil value. Errors are deferred until Row's Scan method
 // is called.
@@ -519,7 +584,7 @@ func (t *Tx) RebindQueryRow(query string, args ...any) *sql.Row {
 	return t.tx.QueryRow(t.tx.Rebind(query), args...)
 }
 
-// Exec executes a query without returning any rows. The query is rebound from
+// RebindExec executes a query without returning any rows. The query is rebound from
 // `?` to the DB driver's bind type. The args are for any placeholder parameters
 // in the query.
 func (t *Tx) RebindExec(query string, args ...any) (sql.Result, error) {
