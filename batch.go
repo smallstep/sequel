@@ -19,7 +19,7 @@ const BatchSize = 100
 
 // Batch inserts a slice of items into the given table using multi-row INSERT
 // statements. Items are inserted in chunks of [BatchSize]. The columns
-// parameter specifies the column names, and the values function maps each item to
+// parameter specifies the column names, and the extractValues function maps each item to
 // its column values. The length of the slice returned by extractValues must match the
 // length of columns. Batch does nothing if items is empty. Table, columns and onConfict
 // are not sanitized; they must come from a trusted source. The extractValues function will
