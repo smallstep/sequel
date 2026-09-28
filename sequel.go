@@ -511,6 +511,11 @@ func (t *Tx) rebindModel(query string) string {
 	return query
 }
 
+// Tx returns the embedded *sql.Tx.
+func (t *Tx) Tx() *sql.Tx {
+	return t.tx.Tx
+}
+
 // Commit commits the transaction.
 func (t *Tx) Commit() error {
 	err := t.tx.Commit()
