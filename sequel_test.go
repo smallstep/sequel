@@ -579,6 +579,22 @@ func TestTxQueries(t *testing.T) {
 		assert.NoError(t, tx.Commit())
 	})
 
+	t.Run("sql tx", func(t *testing.T) {
+		tx, err := db.Begin(ctx)
+		require.NoError(t, err)
+		defer func() {
+			assert.NoError(t, tx.Rollback())
+		}()
+
+		// A write through the *sql.Tx is visible inside the same transaction.
+		_, err = tx.Tx().ExecContext(ctx, "UPDATE person_test SET name = $1 WHERE id = $2", "Foo Bar", p1.GetID())
+		require.NoError(t, err)
+
+		var name string
+		require.NoError(t, tx.QueryRow("SELECT name FROM person_test WHERE id = $1", p1.GetID()).Scan(&name))
+		assert.Equal(t, "Foo Bar", name)
+	})
+
 	t.Run("insert error", func(t *testing.T) {
 		tx, err := db.Begin(ctx)
 		require.NoError(t, err)
